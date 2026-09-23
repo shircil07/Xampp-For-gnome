@@ -7,6 +7,11 @@ A native control panel for XAMPP on Zorin OS (and other GNOME / Ubuntu 22.04+ sy
 - XAMPP only listens on this computer by default. Lean mode is optional and saves RAM.
 - Optional tray icon. Nothing runs at boot.
 
+## Documentation
+
+- [User guide](docs/USER-GUIDE.md): using the panel, sites, common problems
+- [Technical reference](docs/MAINTAINER.md): architecture, every file it touches, security model, troubleshooting, upgrading
+
 ## Install
 
 ```bash
