@@ -32,8 +32,10 @@ Steps, each idempotent and logged to stdout:
 
 1. **Preflight:** must be root; must be x86_64; detects apt. Aborts with a clear
    message otherwise.
+   Options: `--allow-lan` (skip localhost binding), `--lean` / `--no-lean`
+   (skip the lean-mode prompt).
 2. **Dependencies (apt):** `libcrypt1`, `net-tools`, `python3-gi`,
-   `gir1.2-gtk-4.0`, `gir1.2-adw-1`, `gir1.2-ayatanaappindicator3-0.1`,
+   `gir1.2-gtk-4.0`, `gir1.2-adw-1`, `gir1.2-ayatanaappindicator3-0.1`, `acl`,
    `policykit-1` (or `pkexec` on newer releases — install whichever exists).
 3. **XAMPP:** if `/opt/lampp/lampp` exists, skip. Otherwise locate
    `xampp-linux-x64-*-installer.run` (argument, or same dir, or `~/Downloads`)
@@ -50,7 +52,10 @@ Steps, each idempotent and logged to stdout:
    (empty) and append `Include etc/extra/xampp-panel-vhosts.conf` to
    `/opt/lampp/etc/httpd.conf` if not present (backup first as
    `httpd.conf.xampp-panel.bak`).
-7. **Manifest:** write every created file/modified line to
+7. **Hardening & lean mode:** apply the localhost binding, then offer the
+   `lampp security` password step and lean mode (see Security and Resource
+   efficiency).
+8. **Manifest:** write every created file/modified line to
    `/opt/xampp-panel/install-manifest.txt` for the uninstaller.
 
 ### 2. `uninstall.sh`
@@ -70,6 +75,7 @@ input exits non-zero. No shell interpolation of user input.
 | `start <svc>` / `stop <svc>` | `svc` ∈ {apache, mysql, ftp, all} → `/opt/lampp/lampp start<svc>` etc. |
 | `site-add <name> <dir>` | `name` must match `^[a-z0-9][a-z0-9-]{0,62}$`; `dir` must be an existing absolute path under the invoking user's home (`PKEXEC_UID`). Writes a `<VirtualHost>` block for `<name>.local` into the managed vhost file, adds `127.0.0.1 <name>.local` to `/etc/hosts` inside a `# BEGIN xampp-panel` / `# END xampp-panel` block, then graceful-reloads Apache. |
 | `site-remove <name>` | Reverses the above. |
+| `lean on\|off` | Adds/removes the lean-mode include lines (see Resource efficiency). |
 
 Status queries **do not** need root: the panel reads PID files in
 `/opt/lampp/logs` / `/opt/lampp/var/mysql` and checks ports directly.
@@ -82,6 +88,7 @@ minutes), `allow_inactive/any = no`.
 Python package, GTK4 + libadwaita, `Adw.Application` id `org.zorin.XamppPanel`.
 
 - **Main window** (`Adw.ApplicationWindow` + `Adw.ViewSwitcher`), two pages:
+  - A warning banner (`Adw.Banner`) is shown while MySQL root has no password.
   - **Services:** one `Adw.PreferencesGroup` with a row per service (Apache,
     MySQL, ProFTPD): status dot (green running / grey stopped / amber busy),
     port subtitle, `Gtk.Switch`, "Log" button opening a log viewer dialog
@@ -93,10 +100,10 @@ Python package, GTK4 + libadwaita, `Adw.Application` id `org.zorin.XamppPanel`.
     folder chooser (defaults to creating `~/Sites/<name>` with a starter
     `index.php`).
 - **Preferences:** "Keep running in tray when window is closed" (off by
-  default), stored in `~/.config/xampp-panel/settings.json`.
+  default) and a "Lean mode" toggle, stored in `~/.config/xampp-panel/settings.json`.
 - Follows system light/dark automatically (libadwaita default).
-- Status is polled every 2 s off the main loop; switches are insensitive while
-  a helper call is in flight.
+- Status updates are event-driven (see Resource efficiency); switches are
+  insensitive while a helper call is in flight.
 - Errors from the helper (non-zero exit, cancelled auth) show an `Adw.Toast`
   with the stderr summary; cancelled auth reverts the switch silently.
 
@@ -109,6 +116,79 @@ Communicates with the panel only by launching it / calling the helper; its own
 status comes from the same non-root status module. If the indicator library or
 the GNOME AppIndicator extension is unavailable, the preference is disabled
 with an explanatory subtitle.
+
+## Security
+
+XAMPP's defaults are made for convenience, not safety: it listens on all
+network interfaces, MySQL `root` has no password, and phpMyAdmin is open. The
+setup and helper harden this:
+
+1. **Localhost only (default, applied by setup):** Apache `Listen 127.0.0.1:80`
+   / `127.0.0.1:443`, MySQL `bind-address=127.0.0.1`, ProFTPD bound to
+   127.0.0.1. Nothing is reachable from the LAN/Wi-Fi. Original config files
+   are backed up (`*.xampp-panel.bak`) and restored by `uninstall.sh`.
+   `setup.sh --allow-lan` skips this for users who knowingly want LAN access.
+2. **FTP off by default:** "Start all" starts Apache + MySQL only; ProFTPD must
+   be switched on explicitly.
+3. **MySQL/phpMyAdmin passwords:** setup offers (y/N) to run XAMPP's own
+   `/opt/lampp/lampp security` to set the MySQL root and phpMyAdmin passwords.
+   The panel shows a warning banner while MySQL root still has no password
+   (checked via `mysql -uroot --connect-timeout=1 -e ''` returning success).
+4. **Helper hardening:**
+   - Installed root-owned 0755 in a root-owned directory; polkit policy pins
+     it with `org.freedesktop.policykit.exec.path`.
+   - Whitelisted subcommands only; `argv` only, never `shell=True`; fixed
+     `PATH`; ignores the caller's environment.
+   - Site names validated by regex; site dirs resolved with `realpath` and
+     required to be inside the invoking user's home (uid from `PKEXEC_UID`),
+     owned by that user, and not a symlink escape.
+   - Writes to `/etc/hosts` and the vhost file are atomic (temp file in the
+     same dir + `os.replace`), touch only the managed `# BEGIN/END
+     xampp-panel` block, and keep a one-time backup.
+   - Runs `apachectl -t` config test before reload; on failure restores the
+     previous vhost file and reports the error.
+5. **Site vhosts:** `Require local`, `Options -Indexes +FollowSymLinks`,
+   `AllowOverride All`. Apache runs as XAMPP's `daemon` user, so the helper
+   grants the minimum read access with ACLs (package `acl`): `u:daemon:--x`
+   on `$HOME` and `~/Sites`, `u:daemon:r-X` (plus default ACL) on the site
+   folder only. The rest of the home directory stays unreadable. `site-remove`
+   revokes these ACLs.
+6. **Polkit:** `auth_admin_keep` for active local sessions only; remote/inactive
+   sessions denied.
+7. The unprivileged GUI never runs as root, and nothing is added to sudoers.
+
+## Resource efficiency
+
+**Panel and tray (target: ~0 % CPU when idle, < 60 MB RSS panel, < 30 MB tray):**
+
+- **Event-driven status:** `Gio.FileMonitor` (inotify) on the XAMPP PID files
+  (`/opt/lampp/logs/httpd.pid`, the MySQL `.pid`, `proftpd.pid`) instead of
+  tight polling. A 10 s fallback check (PID alive via `os.kill(pid, 0)`, no
+  subprocesses) catches crashed services that left a stale PID file.
+- The fallback timer runs **only while the window is visible**; it pauses when
+  the window is hidden or minimized. The tray uses file monitors plus a 30 s
+  fallback.
+- Status checks read files and `/proc` directly: no `ps`, `netstat` or `ss`
+  subprocesses. Port-owner lookups happen only on demand (when a start fails).
+- Closing the window **exits the process** unless tray mode is on. The tray is
+  a separate small process only when enabled. There are no background daemons,
+  and nothing runs at login.
+- The log viewer reads only the last 64 KB of a log file, and only while it is
+  open.
+- Slow imports (e.g. the folder chooser) are loaded lazily.
+
+**XAMPP itself (optional "Lean mode", offered by setup, reversible):**
+
+- Apache prefork: `StartServers 2`, `MinSpareServers 1`, `MaxSpareServers 3`,
+  `MaxRequestWorkers 20`. That's plenty for local development and far fewer
+  idle processes than the defaults.
+- MySQL: `innodb_buffer_pool_size=64M`, `performance_schema=OFF`,
+  `max_connections=30`. This cuts idle RAM by roughly 150–300 MB.
+- These settings go into separate drop-in files (`xampp-panel-lean.conf`) that
+  are included, so turning lean mode off just removes the include. The
+  Preferences page has a toggle that calls the helper (`lean on|off`, added to
+  the whitelist).
+- Nothing starts at boot, so XAMPP only uses resources while you use it.
 
 ## Module layout
 
@@ -137,10 +217,14 @@ xampp-panel/
 
 - **Unit (pytest, no root, no GTK):** status detection against fake PID/port
   fixtures; helper argument validation (whitelist, name regex, path-under-home
-  checks, rejection of `..`, symlinks out of home); vhost/hosts block
+  checks, rejection of `..`, symlinks out of home, ownership); atomic write
+  helpers; localhost-binding and lean-mode config rewriting on fixture copies of
+  XAMPP's `httpd.conf`/`my.cnf`; vhost/hosts block
   rendering and idempotent add/remove on temp files.
 - **Script checks:** `shellcheck` on `setup.sh` / `uninstall.sh`; `bash -n`.
-- **Manual on the real machine:** run `setup.sh`, launch from app menu,
+- **Manual on the real machine:** run `setup.sh`, confirm
+  `ss -ltn` shows only 127.0.0.1 listeners, check idle panel CPU/RAM with
+  `top`, check the MySQL RSS difference with lean mode on and off, launch from app menu,
   toggle each service, add/remove a site and load it in the browser, enable
   tray, run `uninstall.sh` and confirm the manifest is fully reversed.
 
