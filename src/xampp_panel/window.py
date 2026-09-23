@@ -36,6 +36,10 @@ def open_uri(uri: str) -> None:
         pass
 
 
+def _esc(text) -> str:
+    return GLib.markup_escape_text(str(text))
+
+
 def _make_banner(text):
     """Adw.Banner on libadwaita ≥ 1.3, a revealer with a label otherwise."""
     if hasattr(Adw, "Banner"):
@@ -64,28 +68,49 @@ class ServiceRow(Adw.ActionRow):
         self.set_activatable_widget(self.switch)
 
     def show_state(self, state: State, busy: bool) -> None:
+        if busy:
+            self.dot.set_css_classes(["warning"])
+            self.switch.set_sensitive(False)
+            self.set_subtitle(_esc(f"{self.svc.description} · port {self.svc.port} · working…"))
+            return
         self.dot.set_css_classes([_DOT_CLASS[state]])
         self.switch.handler_block(self._handler)
         self.switch.set_active(state in (State.RUNNING, State.STARTING))
         self.switch.handler_unblock(self._handler)
-        self.switch.set_sensitive(not busy and state != State.CONFLICT)
-        self.set_subtitle(f"{self.svc.description} · port {self.svc.port}{_STATE_NOTE.get(state, '')}")
+        self.switch.set_sensitive(state != State.CONFLICT)
+        self.set_subtitle(_esc(f"{self.svc.description} · port {self.svc.port}{_STATE_NOTE.get(state, '')}"))
 
 
 class LogWindow(Adw.Window):
-    def __init__(self, parent, title, text):
+    def __init__(self, parent, title, load_text):
         super().__init__(transient_for=parent, title=f"{title} log", default_width=760, default_height=480)
-        view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
-                            top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
-        buffer = view.get_buffer()
-        buffer.set_text(text or "The log is empty.")
-        scroll = Gtk.ScrolledWindow(child=view, vexpand=True)
+        self._load_text = load_text
+        self.view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                 top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
+        scroll = Gtk.ScrolledWindow(child=self.view, vexpand=True)
+        header = Adw.HeaderBar()
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Reload")
+        refresh.connect("clicked", lambda *_: self.reload())
+        header.pack_start(refresh)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(Adw.HeaderBar())
+        box.append(header)
         box.append(scroll)
         self.set_content(box)
+        self.set_text(load_text())
+        self.connect("map", lambda *_: GLib.idle_add(self._scroll_to_end))
+
+    def reload(self) -> None:
+        self.set_text(self._load_text())
+
+    def set_text(self, text) -> None:
+        self.view.get_buffer().set_text(text or "The log is empty.")
+        GLib.idle_add(self._scroll_to_end)
+
+    def _scroll_to_end(self):
+        buffer = self.view.get_buffer()
         end = buffer.create_mark(None, buffer.get_end_iter(), False)
-        self.connect("map", lambda *_: GLib.idle_add(lambda: view.scroll_to_mark(end, 0, False, 0, 1) or False))
+        self.view.scroll_to_mark(end, 0, False, 0, 1)
+        return False
 
 
 class AddSiteWindow(Adw.Window):
@@ -127,7 +152,7 @@ class AddSiteWindow(Adw.Window):
         name = self.name.get_text().strip()
         self.add_button.set_sensitive(sites.validate_name(name))
         if self.folder is None:
-            self.folder_row.set_subtitle(f"~/Sites/{name or '<name>'} (created for you)")
+            self.folder_row.set_subtitle(_esc(f"~/Sites/{name or '<name>'} (created for you)"))
 
     def _choose(self, *_):
         if hasattr(Gtk, "FileDialog"):  # GTK ≥ 4.10
@@ -153,7 +178,7 @@ class AddSiteWindow(Adw.Window):
     def _set_folder(self, file):
         if file and file.get_path():
             self.folder = Path(file.get_path())
-            self.folder_row.set_subtitle(str(self.folder))
+            self.folder_row.set_subtitle(_esc(self.folder))
 
     def _add(self, *_):
         name = self.name.get_text().strip()
@@ -218,13 +243,14 @@ class MainWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup(title="Services")
         buttons = Gtk.Box(spacing=6)
-        start = Gtk.Button(label="Start", valign=Gtk.Align.CENTER, css_classes=["suggested-action"],
-                           tooltip_text="Start Apache and MySQL")
-        start.connect("clicked", lambda *_: self.call_helper(["start", "all"], busy={"apache", "mysql"}))
-        stop = Gtk.Button(label="Stop all", valign=Gtk.Align.CENTER)
-        stop.connect("clicked", lambda *_: self.call_helper(["stop", "all"], busy={s.key for s in services.SERVICES}))
-        buttons.append(start)
-        buttons.append(stop)
+        self.start_button = Gtk.Button(label="Start", valign=Gtk.Align.CENTER, css_classes=["suggested-action"],
+                                       tooltip_text="Start Apache and MySQL")
+        self.start_button.connect("clicked", lambda *_: self.call_helper(["start", "all"], busy={"apache", "mysql"}))
+        self.stop_button = Gtk.Button(label="Stop all", valign=Gtk.Align.CENTER)
+        self.stop_button.connect(
+            "clicked", lambda *_: self.call_helper(["stop", "all"], busy={s.key for s in services.SERVICES}))
+        buttons.append(self.start_button)
+        buttons.append(self.stop_button)
         group.set_header_suffix(buttons)
         for svc in services.SERVICES:
             row = ServiceRow(svc, services.log_path(svc.key, PATHS) is not None, self.toggle_service, self.show_log)
@@ -272,6 +298,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.states = services.snapshot(PATHS)
         for key, row in self.rows.items():
             row.show_state(self.states[key], key in self.busy)
+        self.start_button.set_sensitive(not self.busy)
+        self.stop_button.set_sensitive(not self.busy)
         mysql = self.states["mysql"]
         if mysql == State.RUNNING and previous_mysql != State.RUNNING:
             self._check_mysql_password()
@@ -310,6 +338,8 @@ class MainWindow(Adw.ApplicationWindow):
         except GLib.Error as e:
             self.busy -= busy
             self.toast(e.message)
+            if failed:
+                failed()
             self.refresh()
             return
 
@@ -341,14 +371,24 @@ class MainWindow(Adw.ApplicationWindow):
 
     def show_log(self, svc):
         path = services.log_path(svc.key, PATHS)
+
+        def load():
+            try:
+                return fsutil.tail(path)
+            except FileNotFoundError:
+                return "No log entries yet."
+
         try:
-            text = fsutil.tail(path)
+            LogWindow(self, svc.title, load).present()
         except PermissionError:
-            self.call_helper(["log", svc.key], done=lambda out: LogWindow(self, svc.title, out).present())
-            return
-        except FileNotFoundError:
-            text = "No log entries yet."
-        LogWindow(self, svc.title, text).present()
+            def opened(out):
+                window = LogWindow(self, svc.title, lambda: out)
+                window.reload = lambda: self.call_helper(["log", svc.key], done=window.set_text)
+                window.present()
+
+            self.call_helper(["log", svc.key], done=opened)
+        except OSError as e:
+            self.toast(e.strerror)
 
     def open_target(self, target: str):
         if target == SITES_DIR.as_uri():
@@ -367,7 +407,7 @@ class MainWindow(Adw.ApplicationWindow):
         if not mine:
             self._add_site_row(Adw.ActionRow(title="No sites yet", subtitle="Click + to create one."))
         for site in mine:
-            row = Adw.ActionRow(title=f"{site.name}.local", subtitle=site.path)
+            row = Adw.ActionRow(title=_esc(f"{site.name}.local"), subtitle=_esc(site.path))
             for icon, tip, action in (
                 ("web-browser-symbolic", "Open in browser", lambda _b, s=site: open_uri(s.url)),
                 ("folder-open-symbolic", "Open folder", lambda _b, s=site: open_uri(Path(s.path).as_uri())),

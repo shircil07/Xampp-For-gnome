@@ -34,3 +34,8 @@ class GuiCompileTest(unittest.TestCase):
     @unittest.skipUnless(HAS_GTK4, "GTK 4 / libadwaita not available")
     def test_window_imports(self):
         import xampp_panel.window  # noqa: F401
+        import xampp_panel.app  # noqa: F401
+        import xampp_panel.tray  # noqa: F401
+        from gi.repository import GLib
+
+        self.assertIsNotNone(GLib.VariantType.new("(b)"))

@@ -18,10 +18,10 @@ def tray_available() -> bool:
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         reply = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-                              "NameHasOwner", GLib.Variant("(s)", (_SNI_WATCHER,)), GLib.VariantType("(b)"),
+                              "NameHasOwner", GLib.Variant("(s)", (_SNI_WATCHER,)), GLib.VariantType.new("(b)"),
                               Gio.DBusCallFlags.NONE, 500, None)
         return reply.unpack()[0]
-    except GLib.Error:
+    except Exception:
         return False
 
 
@@ -44,6 +44,7 @@ class PanelApp(Adw.Application):
         flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", Gio.ApplicationFlags.FLAGS_NONE)
         super().__init__(application_id=APP_ID, flags=flags)
         self.settings = settings.load()
+        self._lean_busy = False
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -65,8 +66,20 @@ class PanelApp(Adw.Application):
             launch_tray()
 
     def do_activate(self):
-        window = self.props.active_window or MainWindow(self)
+        window = self.props.active_window
+        if window is None:
+            window = MainWindow(self)
+            window.connect("notify::is-active", self._on_window_active)
         window.present()
+
+    def _on_window_active(self, window, _pspec):
+        """Pick up settings changed elsewhere (e.g. by the tray) whenever the window regains focus."""
+        if not window.is_active():
+            return
+        self.settings = settings.load()
+        tray = self.lookup_action("tray")
+        if tray:
+            tray.set_state(GLib.Variant.new_boolean(self.settings["tray"]))
 
     def _on_tray(self, action, value):
         action.set_state(value)
@@ -76,16 +89,23 @@ class PanelApp(Adw.Application):
             launch_tray()  # the tray quits by itself when the setting turns off
 
     def _on_lean(self, action, value):
+        if self._lean_busy:
+            return
         on = value.get_boolean()
         window = self.props.active_window
         if window is None:
             return
 
         def done(_out):
+            self._lean_busy = False
             action.set_state(value)
             window.toast(f"Lean mode {'on' if on else 'off'}. Restart Apache and MySQL to apply.")
 
-        window.call_helper(["lean", "on" if on else "off"], done=done)
+        def failed():
+            self._lean_busy = False
+
+        self._lean_busy = True
+        window.call_helper(["lean", "on" if on else "off"], done=done, failed=failed)
 
 
 def run_app(argv) -> int:
