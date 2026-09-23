@@ -13,7 +13,7 @@ Technical details and troubleshooting are in [MAINTAINER.md](MAINTAINER.md).
 In a terminal:
 
 ```bash
-cd ~/Downloads/xampp-panel
+cd ~/Downloads/xampp-panel     # the project folder (a GitHub clone is called Xampp-For-gnome)
 sudo ./setup.sh
 ```
 

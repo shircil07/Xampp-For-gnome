@@ -6,7 +6,7 @@ want to change the panel. For everyday use, see [USER-GUIDE.md](USER-GUIDE.md).
 - **Version:** 0.1.0 (built 2026-09-23)
 - **Target:** Zorin OS (GNOME, Wayland), x86_64; works on Ubuntu 22.04+ bases
 - **XAMPP:** 8.2.12 (`xampp-linux-x64-8.2.12-0-installer.run`, MariaDB 10.4.32)
-- **Repo:** `~/Downloads/xampp-panel` (git, branch `feat/xampp-panel`)
+- **Repo:** https://github.com/shircil07/Xampp-For-gnome (private), branch `master`; local copy `~/Downloads/xampp-panel`
 - **Design history:** `docs/superpowers/specs/2026-09-23-xampp-panel-design.md` (the spec) and
   `docs/superpowers/plans/2026-09-23-xampp-panel.md` (the task-by-task plan)
 
@@ -299,7 +299,7 @@ journalctl --user --since "10 min ago" | grep -iA25 xampp
 | `name.local` gives **403 Forbidden** | Apache can't read the folder | `getfacl ~/Sites/name \| grep daemon`; remove and re-add the site |
 | `name.local` shows the XAMPP welcome page | Apache not reloaded after the site was added | Restart Apache from the panel |
 | Chrome still can't open `.local` while `curl -I http://name.local` works | Chrome "Secure DNS" bypassing `/etc/hosts` | Chrome settings → Privacy → Security → turn off "Use secure DNS", or use Firefox |
-| Tray option greyed out ("needs the AppIndicator extension") | GNOME AppIndicator extension off | Enable "AppIndicator and KStatusNotifierItem Support" in Extensions |
+| Tray option greyed out ("needs the AppIndicator extension") | No AppIndicator/StatusNotifier support running in GNOME | Enable the AppIndicator extension in the Extensions app (on Zorin, check Zorin Appearance → Extensions); then reopen the panel |
 | Everything looks wrong after an XAMPP reinstall | XAMPP's config files were replaced | See §12, "Upgrading XAMPP" |
 
 Full manual reset of the config, if the tools themselves are broken:
@@ -321,7 +321,7 @@ Only restore `/etc/hosts` from its backup if you haven't edited it for other rea
 ### Updating the panel after changing its code
 
 ```bash
-cd ~/Downloads/xampp-panel
+cd ~/Downloads/xampp-panel          # or wherever you cloned the repo
 PYTHONPATH=src python3 -m unittest discover -s tests   # must say OK
 sudo ./setup.sh --no-lean     # re-running is safe; it stops XAMPP, reinstalls the code, re-applies config
 ```
@@ -332,6 +332,15 @@ sudo ./setup.sh --no-lean     # re-running is safe; it stops XAMPP, reinstalls t
 ```bash
 sudo install -o root -g root -m 0644 src/xampp_panel/<file>.py /opt/xampp-panel/lib/xampp_panel/
 ```
+
+### Checking the installed copy matches the repo
+
+```bash
+cd ~/Downloads/xampp-panel
+diff -r -x __pycache__ src/xampp_panel /opt/xampp-panel/lib/xampp_panel && echo "installed = repo"
+```
+
+If it prints differences, re-run `sudo ./setup.sh --no-lean` (or `--lean`).
 
 ### Upgrading XAMPP (new version or reinstall)
 
