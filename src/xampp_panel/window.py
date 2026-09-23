@@ -218,7 +218,11 @@ class MainWindow(Adw.ApplicationWindow):
         header = Adw.HeaderBar()
         header.set_title_widget(Adw.ViewSwitcherTitle(stack=stack, title="XAMPP"))
         menu = Gio.Menu()
-        menu.append("Keep in tray when closed", "app.tray")
+        tray_action = app.lookup_action("tray")
+        tray_label = "Keep in tray when closed"
+        if tray_action is not None and not tray_action.get_enabled():
+            tray_label += " (needs the AppIndicator extension)"
+        menu.append(tray_label, "app.tray")
         menu.append("Lean mode (uses less memory)", "app.lean")
         menu.append("Quit", "app.quit")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Menu"))
@@ -360,6 +364,11 @@ class MainWindow(Adw.ApplicationWindow):
                 if failed:
                     failed()
             else:
+                for line in (err or "").splitlines():
+                    if line.startswith("warning:"):
+                        message = line[len("warning:"):].strip()
+                        if message:
+                            self.toast(message[0].upper() + message[1:])
                 if done:
                     done(out)
             self.refresh()
@@ -379,7 +388,7 @@ class MainWindow(Adw.ApplicationWindow):
                 return "No log entries yet."
 
         try:
-            LogWindow(self, svc.title, load).present()
+            load()
         except PermissionError:
             def opened(out):
                 window = LogWindow(self, svc.title, lambda: out)
@@ -389,6 +398,8 @@ class MainWindow(Adw.ApplicationWindow):
             self.call_helper(["log", svc.key], done=opened)
         except OSError as e:
             self.toast(e.strerror)
+        else:
+            LogWindow(self, svc.title, load).present()
 
     def open_target(self, target: str):
         if target == SITES_DIR.as_uri():

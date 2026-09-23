@@ -143,13 +143,13 @@ fi
 case "$LEAN" in
   yes) "$HELPER" lean on ;;
   no) ;;
-  ask) if ask "Turn on lean mode (fewer Apache processes, roughly 150–300 MB less RAM for MySQL)?"; then "$HELPER" lean on; fi ;;
+  ask) if ask "Turn on lean mode (fewer idle Apache processes and a smaller MySQL)?"; then "$HELPER" lean on; fi ;;
 esac
 
 if ask "Set passwords for MySQL root and phpMyAdmin now (recommended)?"; then
-  "$LAMPP/lampp" startmysql
+  "$LAMPP/lampp" startmysql || echo "MySQL did not start; skipping password setup." >&2
   "$LAMPP/lampp" security </dev/tty || echo "Password setup did not finish. You can run it again with: sudo $LAMPP/lampp security"
-  "$LAMPP/lampp" stopmysql
+  "$LAMPP/lampp" stopmysql || true
 fi
 
 say "Done"

@@ -7,8 +7,9 @@ from dataclasses import asdict, dataclass
 from . import fsutil
 
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
-# Characters that could break out of an Apache config string or trigger ${VAR} expansion.
-UNSAFE_PATH_CHARS = frozenset('"$\\\n\r\t')
+# Characters that could break out of an Apache config string, trigger ${VAR}
+# expansion, or act as wildcards in an Apache <Directory> block.
+UNSAFE_PATH_CHARS = frozenset('"$\\\n\r\t*?[]')
 
 
 @dataclass(frozen=True)

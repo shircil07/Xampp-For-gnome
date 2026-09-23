@@ -2851,7 +2851,7 @@ The development sandbox can't reach `/opt` or run root commands, so these checks
 - [ ] **Step 6:** Sites tab → + → name `demo` → Add. The browser should open `http://demo.local/` and show "demo.local works".
 - [ ] **Step 7:** `getfacl ~/Sites/demo | grep daemon` should show `user:daemon:r-x`. `getfacl ~ | grep daemon` should show `user:daemon:--x`.
 - [ ] **Step 8:** Open `http://localhost/phpmyadmin/`. It should load.
-- [ ] **Step 9:** Idle check: `top -p $(pgrep -f xampp_panel -d,)` should show about 0 % CPU, and panel RES under 60 MB.
-- [ ] **Step 10:** Menu → Lean mode on, then restart MySQL. `ps -o rss= -C mysqld` should drop compared with before.
+- [ ] **Step 9:** Idle check: `top -p $(pgrep -f /opt/xampp-panel/bin/xampp-panel -d,)` should show about 0 % CPU, and panel RES under 60 MB.
+- [ ] **Step 10:** Menu → Lean mode on, then restart MySQL. Compare `ps -o rss= -C mysqld` before/after; record the difference.
 - [ ] **Step 11:** Menu → Keep in tray. The tray icon appears (needs the AppIndicator extension), and its Start/Stop items work.
 - [ ] **Step 12:** Remove the `demo` site, then `sudo ./uninstall.sh`. Afterwards `grep xampp-panel /opt/lampp/etc/httpd.conf /etc/hosts` should find nothing, and the app-menu entry should be gone.

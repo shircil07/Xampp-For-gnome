@@ -183,8 +183,8 @@ setup and helper harden this:
 - Apache prefork: `StartServers 2`, `MinSpareServers 1`, `MaxSpareServers 3`,
   `MaxRequestWorkers 20`. That's plenty for local development and far fewer
   idle processes than the defaults.
-- MySQL: `innodb_buffer_pool_size=64M`, `performance_schema=OFF`,
-  `max_connections=30`. This cuts idle RAM by roughly 150–300 MB.
+- MySQL: `innodb_buffer_pool_size=16M`, `max_connections=30`. Savings to be
+  measured on the host.
 - These settings go into separate drop-in files (`xampp-panel-lean.conf`) that
   are included, so turning lean mode off just removes the include. The
   Preferences page has a toggle that calls the helper (`lean on|off`, added to

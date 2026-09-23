@@ -66,8 +66,7 @@ LEAN_HTTPD = """\
 LEAN_MYSQL = """\
 # XAMPP Panel lean mode: smaller buffers for a single developer.
 [mysqld]
-innodb_buffer_pool_size=64M
-performance_schema=OFF
+innodb_buffer_pool_size=16M
 max_connections=30
 """
 

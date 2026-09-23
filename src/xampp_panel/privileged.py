@@ -2,8 +2,10 @@
 
 from .paths import DEFAULT, Paths
 
-# pkexec: 126 = the user dismissed the dialog, 127 = not authorized / auth failed.
-_CANCELLED = (126, 127)
+# pkexec: 126 = the user dismissed the dialog, 127 = not authorized, or the
+# helper binary itself is missing/not executable.
+_CANCELLED = 126
+_NOT_AUTHORIZED = 127
 
 
 class HelperError(Exception):
@@ -19,8 +21,10 @@ def argv_for(*args: str, paths: Paths = DEFAULT) -> list[str]:
 
 
 def interpret(returncode: int, stdout: str, stderr: str) -> str:
-    if returncode in _CANCELLED:
+    if returncode == _CANCELLED:
         raise Cancelled("authentication cancelled")
+    if returncode == _NOT_AUTHORIZED:
+        raise HelperError("Not authorized, or the XAMPP Panel helper is missing")
     if returncode != 0:
         lines = [line for line in (stderr or stdout).splitlines() if line.strip()]
         raise HelperError(lines[-1].strip() if lines else f"the helper failed (exit code {returncode})")

@@ -32,12 +32,13 @@ done
 die() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "run this with: sudo ./uninstall.sh"
 
+failed=0
 if [[ -x $APP_DIR/bin/xampp-helper && -x $LAMPP/lampp ]]; then
   echo "Stopping XAMPP…"
   "$LAMPP/lampp" stop || true
-  "$APP_DIR/bin/xampp-helper" integrate off || echo "Warning: could not undo the sites setup; continuing." >&2
-  "$APP_DIR/bin/xampp-helper" lean off || echo "Warning: could not undo lean mode; continuing." >&2
-  "$APP_DIR/bin/xampp-helper" harden off || echo "Warning: could not undo network hardening; continuing." >&2
+  "$APP_DIR/bin/xampp-helper" integrate off || { echo "Warning: could not undo the sites setup; continuing." >&2; failed=1; }
+  "$APP_DIR/bin/xampp-helper" lean off || { echo "Warning: could not undo lean mode; continuing." >&2; failed=1; }
+  "$APP_DIR/bin/xampp-helper" harden off || { echo "Warning: could not undo network hardening; continuing." >&2; failed=1; }
 fi
 
 if [[ -f $APP_DIR/install-manifest.txt ]]; then
@@ -50,9 +51,16 @@ if [[ -f $APP_DIR/install-manifest.txt ]]; then
   done < "$APP_DIR/install-manifest.txt"
 fi
 rm -rf -- "$APP_DIR"
-for backup in "$LAMPP"/etc/*.xampp-panel.bak "$LAMPP"/etc/extra/*.xampp-panel.bak /etc/hosts.xampp-panel.bak; do
-  rm -f -- "$backup"
-done
+if ((failed == 0)); then
+  for backup in "$LAMPP"/etc/*.xampp-panel.bak "$LAMPP"/etc/extra/*.xampp-panel.bak /etc/hosts.xampp-panel.bak; do
+    rm -f -- "$backup"
+  done
+else
+  echo "Some changes could not be reverted. Backups of the original files were kept:"
+  for backup in "$LAMPP"/etc/*.xampp-panel.bak "$LAMPP"/etc/extra/*.xampp-panel.bak /etc/hosts.xampp-panel.bak; do
+    echo "  $backup"
+  done
+fi
 gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database -q /usr/share/applications 2>/dev/null || true
 if [[ -n ${SUDO_USER:-} ]] && user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)" && [[ -n $user_home ]]; then

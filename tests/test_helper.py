@@ -166,6 +166,12 @@ class SitesTest(HelperCase):
             self.assertEqual(self.call("site-add", name, str(folder)), 2, (name, folder))
         self.assertEqual(sites.load(self.paths.state_file), [])
 
+    def test_site_add_rejects_wildcard_chars(self):
+        wild = self.home / "Sites/we*ird"
+        wild.mkdir()
+        self.assertEqual(self.call("site-add", "ok", str(wild)), 2)
+        self.assertEqual(sites.load(self.paths.state_file), [])
+
     def test_site_add_requires_pkexec_uid(self):
         self.assertEqual(self.call("site-add", "blog", str(self.site_dir), env={}), 2)
 

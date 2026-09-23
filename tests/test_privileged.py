@@ -12,9 +12,14 @@ class PrivilegedTest(unittest.TestCase):
         self.assertEqual(privileged.interpret(0, "ok\n", ""), "ok\n")
 
     def test_cancelled_auth(self):
-        for code in (126, 127):
-            with self.assertRaises(privileged.Cancelled):
-                privileged.interpret(code, "", "Not authorized")
+        with self.assertRaises(privileged.Cancelled):
+            privileged.interpret(126, "", "Not authorized")
+
+    def test_not_authorized_or_missing_helper(self):
+        with self.assertRaises(privileged.HelperError) as ctx:
+            privileged.interpret(127, "", "Not authorized")
+        self.assertNotIsInstance(ctx.exception, privileged.Cancelled)
+        self.assertEqual(str(ctx.exception), "Not authorized, or the XAMPP Panel helper is missing")
 
     def test_error_uses_last_stderr_line(self):
         with self.assertRaises(privileged.HelperError) as ctx:
