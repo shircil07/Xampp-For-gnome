@@ -133,13 +133,6 @@ update-desktop-database -q /usr/share/applications 2>/dev/null || true
 say "Configuring XAMPP"
 HELPER="$APP_DIR/bin/xampp-helper"
 "$HELPER" integrate on
-if ((ALLOW_LAN)); then
-  "$HELPER" harden off
-  echo "LAN access allowed: other devices on your network can reach XAMPP."
-else
-  "$HELPER" harden on
-  echo "XAMPP now only accepts connections from this computer."
-fi
 case "$LEAN" in
   yes) "$HELPER" lean on ;;
   no) ;;
@@ -150,6 +143,15 @@ if ask "Set passwords for MySQL root and phpMyAdmin now (recommended)?"; then
   "$LAMPP/lampp" startmysql || echo "MySQL did not start; skipping password setup." >&2
   "$LAMPP/lampp" security </dev/tty || echo "Password setup did not finish. You can run it again with: sudo $LAMPP/lampp security"
   "$LAMPP/lampp" stopmysql || true
+fi
+
+# After "lampp security": it can add skip-networking, which harden replaces with bind-address.
+if ((ALLOW_LAN)); then
+  "$HELPER" harden off
+  echo "LAN access allowed: other devices on your network can reach XAMPP."
+else
+  "$HELPER" harden on
+  echo "XAMPP now only accepts connections from this computer."
 fi
 
 say "Done"

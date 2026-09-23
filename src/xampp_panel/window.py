@@ -228,7 +228,8 @@ class MainWindow(Adw.ApplicationWindow):
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Menu"))
 
         self.banner, self.show_banner = _make_banner(
-            "MySQL root has no password. Run “sudo /opt/lampp/lampp security” to set one.")
+            "MySQL root has no password. Run “sudo /opt/lampp/lampp security” to set one "
+            "(answer no to its MySQL network and FTP questions).")
         self.toasts = Adw.ToastOverlay(child=stack, vexpand=True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(header)

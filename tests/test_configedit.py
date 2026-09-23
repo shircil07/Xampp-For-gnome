@@ -51,6 +51,15 @@ class MysqlLocalhostTest(unittest.TestCase):
         on = configedit.mysql_localhost("[client]\nport=3306\n", True)
         self.assertTrue(on.endswith("[mysqld]\n# xampp-panel: localhost only\nbind-address=127.0.0.1\n"))
 
+    def test_disables_skip_networking(self):
+        text = MYCNF + "#skip-networking\nskip-networking\n"
+        on = configedit.mysql_localhost(text, True)
+        self.assertNotRegex(on, r"(?m)^skip-networking")
+        self.assertIn('# xampp-panel: was "skip-networking"\n#skip-networking\n', on)
+        self.assertIn("#skip-networking\n# xampp-panel", on)  # XAMPP's own commented line is untouched
+        self.assertEqual(configedit.mysql_localhost(on, True), on)
+        self.assertEqual(configedit.mysql_localhost(on, False), text)
+
 
 class RenderTest(unittest.TestCase):
     def test_vhosts_start_with_localhost_default(self):

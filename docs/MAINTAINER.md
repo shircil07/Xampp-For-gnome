@@ -12,6 +12,35 @@ want to change the panel. For everyday use, see [USER-GUIDE.md](USER-GUIDE.md).
 
 ---
 
+## Handover — 2026-09-23 (evening)
+
+State on the original machine (`zbook`) after this session: Apache, MySQL and ProFTPD all start from the
+panel; MySQL listens on `127.0.0.1:3306` again; `mysql_upgrade` has been run.
+
+What broke and why (both caused by XAMPP's own `lampp security` script, not by the panel):
+
+1. **MySQL had TCP switched off** (log: `port: 0`). `lampp security` offers to "turn off network access"
+   and adds `skip-networking` to `my.cnf`. `setup.sh` ran that step *after* `harden on`, so the panel's
+   `bind-address` was defeated. Clients using `127.0.0.1` failed and the panel showed MySQL as
+   "starting…" forever (it waits for port 3306).
+   **Fixed in code:** `harden on` now comments out an active `skip-networking` (reversible, see §4), and
+   `setup.sh` applies harden **after** the password step.
+2. **ProFTPD wouldn't start** (`unknown configuration directive 'function' on line 44`). `lampp security`
+   sets the FTP password by running a PHP snippet; with short tags off, PHP printed the snippet's source
+   and it was pasted into `proftpd.conf` as the `UserPassword daemon` value. **Fixed by hand** (see §11);
+   the broken file is kept as `/opt/lampp/etc/proftpd.conf.broken`.
+
+Still open:
+
+- MySQL log shows `Access denied for user 'pma'@'localhost'`: phpMyAdmin's `controlpass` in
+  `/opt/lampp/phpmyadmin/config.inc.php` probably doesn't match the `pma` user (likely also from
+  `lampp security`). Harmless unless phpMyAdmin complains about its configuration storage.
+- The panel's banner still recommends `lampp security` (now with a warning). A safer built-in
+  "set MySQL root password" helper command would remove the need for it.
+- No automatic repair of a `proftpd.conf` already broken by `lampp security`.
+
+---
+
 ## 1. What it is
 
 XAMPP ships as a prebuilt binary bundle in `/opt/lampp`. Its own control panel is old, and it
@@ -107,6 +136,7 @@ Before the first change, each file gets a copy named `<file>.xampp-panel.bak`.
 | same | Include for lean mode (only if on) | `# BEGIN xampp-panel lean` |
 | `/opt/lampp/etc/extra/httpd-ssl.conf` | `Listen 443` → `Listen 127.0.0.1:443` | `# xampp-panel: was "Listen 443"` |
 | `/opt/lampp/etc/my.cnf` | `bind-address=127.0.0.1` added under `[mysqld]` | `# xampp-panel: localhost only` |
+| same | Active `skip-networking` commented out (restored by `harden off`) | `# xampp-panel: was "skip-networking"` |
 | same | `!include` for lean mode (only if on) | `# BEGIN xampp-panel lean` |
 | `/opt/lampp/etc/proftpd.conf` | `DefaultAddress 127.0.0.1` + `SocketBindTight on` | `# BEGIN xampp-panel localhost` |
 | `/etc/hosts` | `127.0.0.1  <name>.local` for each site | `# BEGIN xampp-panel sites` |
@@ -248,6 +278,7 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `533398f`, `fdfe944` | setup/uninstall/README; uninstall keeps going past failed steps |
 | `87b68c1` | Final review fixes: lean values, keep backups when a revert fails, surface helper warnings, pkexec 127 message, wildcard path chars |
 | `23307a9` | Host fix: detect XAMPP processes whose comm is a truncated path |
+| (after `556223a`) | Host fix: `harden on` replaces `skip-networking`; `setup.sh` hardens after `lampp security`; banner warning |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -259,6 +290,9 @@ Decisions made during the build (and what they cost if wrong):
 - **Wrong-typed settings values:** they're ignored and the default is used.
 - **Uninstall:** it continues past a failed revert step, but then **keeps** the `.bak` files and lists them.
 - **"Start" button:** it starts Apache + MySQL only. FTP must be switched on explicitly.
+- **`skip-networking` vs `bind-address`:** "localhost only" uses `bind-address=127.0.0.1` and removes
+  `skip-networking`. Both keep MySQL off the network, but `skip-networking` also breaks `127.0.0.1`
+  clients and the panel's port-based status check.
 - **Minimum platform:** GTK 4.6 / libadwaita 1.1 / GLib 2.72. Newer widgets (`Adw.Banner`, `Gtk.FileDialog`) are used only when available.
 
 ---
@@ -272,7 +306,9 @@ Decisions made during the build (and what they cost if wrong):
 | The FTP row has no log button (ProFTPD log location in XAMPP 8.2 unconfirmed) | Look in `/opt/lampp/logs/` and `/opt/lampp/var/` |
 | A log line longer than 64 KB shows as empty in the log viewer | Read the file directly |
 | If `/etc/hosts` is a symlink (rare), editing it replaces the link with a regular file | Not an issue on Zorin |
-| MariaDB warns `Incorrect definition of table mysql.event` / `Please run mysql_upgrade` | Old system tables from an earlier install: `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if a password is set) |
+| MariaDB warns `Incorrect definition of table mysql.event` / `mysql.column_stats` / `Please run mysql_upgrade` | Old system tables from an earlier install: `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if a password is set) |
+| XAMPP's `lampp security` breaks things: its "turn off MySQL network access" adds `skip-networking`, and its FTP password step writes PHP source into `proftpd.conf` | Answer **no** to both questions. Fixes for both are in §11 |
+| `Access denied for user 'pma'@'localhost'` in the MySQL log | phpMyAdmin's `controlpass` doesn't match the `pma` user. Not fixed yet (see Handover) |
 | Starting `xampp-panel` from SSH/remote terminal fails with "Gtk couldn't be initialized" | Normal: there's no display. Open it from the app menu. Errors are then in `journalctl --user` |
 | `shellcheck` was never run on the scripts | `shellcheck setup.sh uninstall.sh` |
 
@@ -294,6 +330,8 @@ journalctl --user --since "10 min ago" | grep -iA25 xampp
 | "port used by another program" | Another server (Ubuntu's `apache2`, `nginx`, `mysql`), **or** a detection problem | `sudo ss -ltnp 'sport = :80'`. If it names `/opt/lampp/...`, it's XAMPP (see §7) |
 | phpMyAdmin: `mysqli::real_connect(): (HY000/2002): No such file or directory` | MySQL isn't running (its socket file is missing) | Start MySQL; if it won't start, see the MySQL log |
 | MySQL won't start | See its log | `sudo tail -n 40 /opt/lampp/var/mysql/$(hostname).err` |
+| MySQL stuck on "starting…"; log says `port: 0` | `skip-networking` active in `my.cnf` (added by `lampp security`) | `sudo grep -n networking /opt/lampp/etc/my.cnf`; then `sudo /opt/xampp-panel/bin/xampp-helper harden on` and `sudo /opt/lampp/lampp stopmysql && sudo /opt/lampp/lampp startmysql` |
+| FTP won't start: `unknown configuration directive 'function'` | `lampp security` wrote PHP source into `proftpd.conf` | `HASH=$(openssl passwd -6) && sudo sed -i '/^UserPassword daemon <?/,/^?>/c\UserPassword daemon '"$HASH" /opt/lampp/etc/proftpd.conf`, then `sudo /opt/lampp/sbin/proftpd -t -c /opt/lampp/etc/proftpd.conf` |
 | Apache won't start | Config error | `sudo /opt/lampp/bin/apachectl -t`; `sudo tail -n 40 /opt/lampp/logs/error_log` |
 | `http://name.local` "site can't be reached" | Site not created, or name not resolving | `grep -A5 "BEGIN xampp-panel sites" /etc/hosts`; `cat /opt/xampp-panel/state/sites.json`; `getent hosts name.local` |
 | `name.local` gives **403 Forbidden** | Apache can't read the folder | `getfacl ~/Sites/name \| grep daemon`; remove and re-add the site |

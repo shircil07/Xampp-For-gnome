@@ -36,12 +36,17 @@ def apache_localhost(text: str, on: bool) -> str:
 
 _MYSQLD = re.compile(r"(?m)^\[mysqld\][ \t]*\n")
 _BIND = "# xampp-panel: localhost only\nbind-address=127.0.0.1\n"
+# XAMPP's "lampp security" adds skip-networking, which turns TCP off entirely ("port: 0"):
+# clients using 127.0.0.1 fail and the panel never sees port 3306. bind-address keeps it local instead.
+_SKIP_NET = re.compile(r"(?m)^(skip[-_]networking\b.*)$")
+_SKIP_NET_OFF = re.compile(r"(?m)^# xampp-panel: was \"(skip[-_]networking\b.*)\"\n#skip-networking$")
 
 
 def mysql_localhost(text: str, on: bool) -> str:
     text = text.replace(_BIND, "")
     if not on:
-        return text
+        return _SKIP_NET_OFF.sub(lambda m: m[1], text)
+    text = _SKIP_NET.sub(lambda m: f'# xampp-panel: was "{m[1]}"\n#skip-networking', text)
     new, count = _MYSQLD.subn(lambda m: m[0] + _BIND, text, count=1)
     if count:
         return new

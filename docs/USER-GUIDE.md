@@ -77,6 +77,9 @@ A yellow bar at the top means **MySQL has no password**. Fix it with:
 sudo /opt/lampp/lampp security
 ```
 
+Answer **no** when it offers to turn off MySQL network access (MySQL already only accepts this computer)
+and **no** to the FTP password question. Both options are broken in XAMPP 8.2 and stop MySQL or FTP working.
+
 ### Sites tab: your own projects
 
 Instead of putting projects in `/opt/lampp/htdocs`, where you need admin rights, each project gets its own
@@ -148,7 +151,9 @@ Before `--remove-xampp`, export any databases you want to keep: phpMyAdmin → E
 | "Not authorized, or the XAMPP Panel helper is missing" | Wrong password, or the install is broken. Re-run `sudo ./setup.sh`. |
 | 🔴 "port used by another program" | Something else uses that port. Run `sudo ss -ltnp 'sport = :80'` (or `:3306`) to see what. |
 | phpMyAdmin says `(HY000/2002): No such file or directory` | MySQL isn't running. Switch it on. |
-| MySQL log mentions `Please run mysql_upgrade` | Run `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if you set a password), then restart MySQL. |
+| MySQL log mentions `Please run mysql_upgrade` or `mysql.column_stats` | Run `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if you set a password), then restart MySQL. |
+| MySQL stays yellow ("starting…") and its log says `port: 0` | Run `sudo /opt/xampp-panel/bin/xampp-helper harden on`, then switch MySQL off and on. |
+| FTP won't start; its error mentions `'function'` | `lampp security` damaged the FTP config. See "Troubleshooting" in [MAINTAINER.md](MAINTAINER.md) §11. |
 | `http://name.local` "can't be reached" | Check the site is listed in the Sites tab. If it is and Chrome still fails, turn off Chrome's "Use secure DNS" or try Firefox. |
 | `name.local` says **Forbidden** | Remove the site and add it again. |
 | Running `xampp-panel` in a remote/SSH terminal says "Gtk couldn't be initialized" | Normal: there's no screen there. Open it from the app menu. |
