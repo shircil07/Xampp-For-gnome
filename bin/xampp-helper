@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# Root helper for XAMPP Panel. Started by pkexec; see io.github.shiron.xampppanel.policy.
+import sys
+
+sys.path.insert(0, "/opt/xampp-panel/lib")
+from xampp_panel.helper import main  # noqa: E402
+
+sys.exit(main())
