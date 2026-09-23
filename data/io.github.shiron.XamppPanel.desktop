@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=XAMPP Control Panel
+GenericName=Local Web Server
+Comment=Start and stop Apache, MySQL and FTP, and manage local sites
+Exec=/opt/xampp-panel/bin/xampp-panel
+Icon=io.github.shiron.XamppPanel
+Terminal=false
+Categories=Development;WebDevelopment;
+Keywords=apache;mysql;mariadb;php;lampp;xampp;server;localhost;
+StartupNotify=true
