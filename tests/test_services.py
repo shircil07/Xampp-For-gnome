@@ -57,6 +57,14 @@ class RunningServicesTest(ServicesCase):
         })
         self.assertEqual(services.running_services(self.paths), {"apache", "ftp"})
 
+    def test_detects_processes_whose_comm_is_a_truncated_path(self):
+        # Seen on Zorin: XAMPP's httpd reports comm "/opt/lampp/bin/" (15-char cut of its path).
+        make_proc(self.proc, procs={
+            100: ("/opt/lampp/bin/", "/opt/lampp/bin/httpd -k start -E /opt/lampp/logs/error_log"),
+            200: ("/opt/lampp/sbin", "/opt/lampp/sbin/mysqld --basedir=/opt/lampp"),
+        })
+        self.assertEqual(services.running_services(self.paths), {"apache", "mysql"})
+
     def test_detects_xampp_mysql(self):
         make_proc(self.proc, procs={500: ("mysqld", "/opt/lampp/sbin/mysqld --basedir=/opt/lampp")})
         self.assertEqual(services.running_services(self.paths), {"mysql"})

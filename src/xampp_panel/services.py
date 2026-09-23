@@ -49,11 +49,20 @@ def listening_ports(paths: Paths = DEFAULT) -> set[int]:
     return ports
 
 
+def _program_name(cmdline: bytes) -> str:
+    """Basename of argv[0]; handles rewritten titles like "proftpd: (accepting connections)"."""
+    argv0 = cmdline.split(b"\0", 1)[0].decode(errors="replace")
+    first_word = argv0.split(" ", 1)[0].rstrip(":")
+    return os.path.basename(first_word)
+
+
 def running_services(paths: Paths = DEFAULT) -> set[str]:
     """Keys of services with a live XAMPP process.
 
-    ProFTPD rewrites its command line ("proftpd: (accepting connections)"), so
-    it is matched on process name alone; the others must mention /opt/lampp.
+    A process is matched by its comm or by argv[0]'s basename, because some
+    XAMPP builds report comm as a truncated path ("/opt/lampp/bin/").
+    ProFTPD rewrites its command line, so it is matched on name alone; the
+    others must mention /opt/lampp.
     """
     found: set[str] = set()
     marker = str(paths.lampp).encode()
@@ -67,10 +76,12 @@ def running_services(paths: Paths = DEFAULT) -> set[str]:
                 continue
             base = Path(entry.path)
             try:
-                svc = _BY_PROCESS.get((base / "comm").read_text().strip())
+                cmdline = (base / "cmdline").read_bytes()
+                svc = (_BY_PROCESS.get((base / "comm").read_text().strip())
+                       or _BY_PROCESS.get(_program_name(cmdline)))
                 if svc is None or svc.key in found:
                     continue
-                if svc.key != "ftp" and marker not in (base / "cmdline").read_bytes():
+                if svc.key != "ftp" and marker not in cmdline:
                     continue
             except OSError:
                 continue  # process exited while we looked
