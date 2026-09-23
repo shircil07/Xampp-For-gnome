@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# XAMPP Panel launcher (installed to /opt/xampp-panel/bin/xampp-panel).
+import sys
+
+sys.path.insert(0, "/opt/xampp-panel/lib")
+from xampp_panel.main import main  # noqa: E402
+
+sys.exit(main())
