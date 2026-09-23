@@ -1,7 +1,7 @@
 # XAMPP Panel for Zorin OS — Design
 
 Date: 2026-09-23
-Status: Approved in brainstorming, pending spec review
+Status: Approved (spec reviewed 2026-09-23)
 
 ## Goal
 
@@ -10,8 +10,9 @@ Zorin OS (GNOME, Wayland, x86_64): one-command install, a native-looking control
 panel, an optional tray icon, graphical password prompts instead of `sudo` in a
 terminal, and easy per-project sites in the user's home directory.
 
-XAMPP itself is a prebuilt binary distribution and is **not modified**, except
-for adding one `Include` line to its Apache config for managed vhosts.
+XAMPP's binaries are **not modified**. Only its config files are touched: the
+managed-vhost `Include`, the localhost binding and optional lean-mode includes.
+Every change is backed up first and reverted by `uninstall.sh`.
 
 ## Decisions (from brainstorming)
 
