@@ -1,5 +1,7 @@
+import errno
 import io
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -23,8 +25,18 @@ class FakeRunner:
     def __call__(self, argv, **kwargs):
         self.calls.append((list(argv), kwargs))
         name = Path(argv[0]).name
-        code = 1 if name in self.fail else 0
-        return subprocess.CompletedProcess(argv, code, stdout=f"{name} ok\n", stderr=f"{name} failed\n" if code else "")
+        # Check if name in fail or any argv element in fail
+        code = 1 if (name in self.fail or any(arg in self.fail for arg in argv)) else 0
+        output = f"{name} ok\n"
+        stderr = f"{name} failed\n" if code else ""
+
+        # If stdout is a file object (tempfile), write to it instead of returning via CompletedProcess
+        stdout_file = kwargs.get("stdout")
+        if stdout_file is not None and hasattr(stdout_file, "write"):
+            stdout_file.write(output.encode("utf-8"))
+            return subprocess.CompletedProcess(argv, code)
+
+        return subprocess.CompletedProcess(argv, code, stdout=output, stderr=stderr)
 
     def argvs(self):
         return [argv for argv, _ in self.calls]
@@ -194,12 +206,46 @@ class SitesTest(HelperCase):
         self.assertFalse(self.paths.vhosts_conf.exists())
         self.assertFalse(self.paths.state_file.exists())
 
+    def test_reload_failure_leaves_site_configured(self):
+        # Create a fake Apache process entry to make apache "running"
+        (self.paths.proc / "100/comm").parent.mkdir(parents=True, exist_ok=True)
+        (self.paths.proc / "100/comm").write_text("httpd\n")
+        (self.paths.proc / "100/cmdline").write_bytes(f"{self.paths.lampp}/bin/httpd\0".encode())
+        # Make reloadapache fail
+        self.run.fail.add("reloadapache")
+        self.assertEqual(self.call("site-add", "blog", str(self.site_dir)), 0)
+        # Site should be configured despite reload failure
+        self.assertIn("ServerName blog.local", self.paths.vhosts_conf.read_text())
+        self.assertIn("127.0.0.1\tblog.local", self.paths.hosts.read_text())
+        self.assertEqual(sites.load(self.paths.state_file), [sites.Site("blog", str(self.site_dir), self.uid)])
+        # But no revoke should have been called (no -x setfacl)
+        self.assertFalse(any(a[0] == "setfacl" and "-x" in a for a in self.run.argvs()))
+
+    def test_grant_failure_rolls_back(self):
+        self.run.fail.add("setfacl")
+        self.assertEqual(self.call("site-add", "blog", str(self.site_dir)), 1)
+        self.assertEqual(sites.load(self.paths.state_file), [])
+        self.assertEqual(self.paths.hosts.read_text(), HOSTS)
+
 
 class LogTest(HelperCase):
     def test_log_prints_tail(self):
         (self.paths.lampp / "logs/error_log").write_text("boom\n")
         self.assertEqual(self.call("log", "apache"), 0)
         self.assertEqual(self.out.getvalue(), "boom\n")
+
+    def test_log_refuses_symlinks(self):
+        target = self.paths.lampp / "logs/real_log"
+        target.write_text("data\n")
+        link = self.paths.lampp / "logs/error_log"
+        link.symlink_to(target)
+        self.assertEqual(self.call("log", "apache"), 1)
+
+    def test_log_refuses_fifos(self):
+        fifo = self.paths.lampp / "logs/error_log"
+        os.mkfifo(fifo)
+        # Don't wait forever for FIFO to open
+        self.assertEqual(self.call("log", "apache"), 1)
 
 
 class TraversalDirsTest(unittest.TestCase):
@@ -208,3 +254,14 @@ class TraversalDirsTest(unittest.TestCase):
             helper.traversal_dirs(Path("/home/u"), Path("/home/u/Sites/blog")),
             [Path("/home/u"), Path("/home/u/Sites")],
         )
+
+
+class ExceptionHandlingTest(HelperCase):
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.call("integrate", "on"), 0)
+        self.run.calls.clear()
+
+    def test_corrupt_json_caught_as_unexpected_error(self):
+        self.paths.state_file.write_text("not valid json")
+        self.assertEqual(self.call("site-remove", "blog"), 1)

@@ -7,8 +7,10 @@ only touched with the invoking user's own privileges.
 
 import os
 import pwd
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import configedit, fsutil, services, sites
@@ -100,6 +102,22 @@ class Helper:
             raise UsageError("site commands must be run from the XAMPP Panel (via pkexec)")
         return self.getpw(int(raw))
 
+    def _run_lampp(self, action: str) -> str:
+        """Run a lampp action without inheriting stdout/stderr pipes.
+
+        Daemons holding pkexec's pipes would hang the GUI forever.
+        Capture output to a tempfile, then return the last non-empty line.
+        """
+        argv = [str(self.paths.lampp_script), action]
+        with tempfile.TemporaryFile(mode="w+b") as tmp:
+            proc = self.run(argv, env=SAFE_ENV, stdin=subprocess.DEVNULL, stdout=tmp, stderr=subprocess.STDOUT)
+            tmp.seek(0)
+            output = tmp.read().decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            last_line = (output.strip().rsplit("\n", 1)[-1] if output.strip() else None) or f"{action} failed"
+            raise HelperFailure(last_line)
+        return output
+
     # -- commands ---------------------------------------------------------
     def dispatch(self, argv: list[str]) -> None:
         match argv:
@@ -124,14 +142,30 @@ class Helper:
 
     def lampp(self, actions) -> None:
         for action in actions:
-            self.out.write(self._run([self.paths.lampp_script, action]))
+            self.out.write(self._run_lampp(action))
 
     def log(self, key: str) -> None:
         path = services.log_path(key, self.paths)
         try:
-            self.out.write(fsutil.tail(path))
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             raise HelperFailure("there is no log file yet") from None
+        except OSError as e:
+            if e.errno == 40:  # ELOOP: symlink
+                raise HelperFailure("the log is not a regular file") from None
+            raise
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise HelperFailure("the log is not a regular file")
+            with os.fdopen(fd, "rb") as fh:
+                self.out.write(fsutil._tail_bytes(fh))
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
 
     def lean(self, on: bool) -> None:
         p = self.paths
@@ -163,12 +197,18 @@ class Helper:
                 fsutil.atomic_write(p.vhosts_conf, configedit.render_vhosts(sites.load(p.state_file), p.htdocs))
             self._edit(p.httpd_conf, lambda t: configedit.set_block(t, "vhosts", f"Include {p.vhosts_conf}"))
             return
-        for site in sites.load(p.state_file):
-            self._revoke(site, [])
+        current_sites = sites.load(p.state_file)
         self._edit(p.hosts, lambda t: configedit.set_block(t, "sites", None))
         self._edit(p.httpd_conf, lambda t: configedit.set_block(t, "vhosts", None))
         p.vhosts_conf.unlink(missing_ok=True)
         p.state_file.unlink(missing_ok=True)
+        for site in current_sites:
+            self._revoke(site, [])
+        if "apache" in services.running_services(p):
+            try:
+                self.out.write(self._run_lampp("reloadapache"))
+            except HelperFailure as e:
+                print(f"warning: Apache did not reload: {e}", file=sys.stderr)
 
     def site_add(self, name: str, folder: str) -> None:
         if not sites.validate_name(name):
@@ -184,8 +224,8 @@ class Helper:
             if _overlaps(path, Path(s.path)):
                 raise UsageError(f"that folder overlaps with {s.name}.local")
         site = sites.Site(name, str(path), pw.pw_uid)
-        self._grant(pw, path)
         try:
+            self._grant(pw, path)
             self._apply(current + [site])
         except Exception:
             self._revoke(site, current)
@@ -221,7 +261,10 @@ class Helper:
         self._edit(p.hosts, lambda t: configedit.set_block(t, "sites", configedit.render_hosts(new_sites)))
         sites.save(p.state_file, new_sites)
         if "apache" in services.running_services(p):
-            self._run([p.lampp_script, "reloadapache"])
+            try:
+                self.out.write(self._run_lampp("reloadapache"))
+            except HelperFailure as e:
+                print(f"warning: Apache did not reload: {e}", file=sys.stderr)
 
     def _grant(self, pw, site_path: Path) -> None:
         home = Path(os.path.realpath(pw.pw_dir))
@@ -262,5 +305,8 @@ def main(argv=None, helper: Helper | None = None) -> int:
         return 2
     except (HelperFailure, OSError) as e:
         print(e, file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"unexpected error: {e}", file=sys.stderr)
         return 1
     return 0

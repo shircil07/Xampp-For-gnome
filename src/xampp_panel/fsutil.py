@@ -42,14 +42,19 @@ def backup_once(path) -> Path:
     return bak
 
 
-def tail(path, max_bytes: int = 65536) -> str:
-    """Return at most the last `max_bytes` of a text file, starting at a line boundary."""
-    with open(path, "rb") as fh:
-        fh.seek(0, os.SEEK_END)
-        size = fh.tell()
-        fh.seek(max(0, size - max_bytes))
-        data = fh.read()
+def _tail_bytes(fh, max_bytes: int = 65536) -> str:
+    """Read at most the last `max_bytes` of a binary file object, starting at a line boundary."""
+    fh.seek(0, os.SEEK_END)
+    size = fh.tell()
+    fh.seek(max(0, size - max_bytes))
+    data = fh.read()
     text = data.decode("utf-8", errors="replace")
     if size > max_bytes:
         text = text.partition("\n")[2]
     return text
+
+
+def tail(path, max_bytes: int = 65536) -> str:
+    """Return at most the last `max_bytes` of a text file, starting at a line boundary."""
+    with open(path, "rb") as fh:
+        return _tail_bytes(fh, max_bytes)
