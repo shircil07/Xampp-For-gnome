@@ -153,5 +153,5 @@ if ask "Set passwords for MySQL root and phpMyAdmin now (recommended)?"; then
 fi
 
 say "Done"
-echo "Open "XAMPP Control Panel" from your app menu, or run: xampp-panel"
+echo "Open “XAMPP Control Panel” from your app menu, or run: xampp-panel"
 echo "To remove the panel later: sudo $SRC_DIR/uninstall.sh"

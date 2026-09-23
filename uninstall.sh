@@ -35,9 +35,9 @@ die() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 if [[ -x $APP_DIR/bin/xampp-helper && -x $LAMPP/lampp ]]; then
   echo "Stopping XAMPP…"
   "$LAMPP/lampp" stop || true
-  "$APP_DIR/bin/xampp-helper" integrate off
-  "$APP_DIR/bin/xampp-helper" lean off
-  "$APP_DIR/bin/xampp-helper" harden off
+  "$APP_DIR/bin/xampp-helper" integrate off || echo "Warning: could not undo the sites setup; continuing." >&2
+  "$APP_DIR/bin/xampp-helper" lean off || echo "Warning: could not undo lean mode; continuing." >&2
+  "$APP_DIR/bin/xampp-helper" harden off || echo "Warning: could not undo network hardening; continuing." >&2
 fi
 
 if [[ -f $APP_DIR/install-manifest.txt ]]; then
@@ -55,8 +55,8 @@ for backup in "$LAMPP"/etc/*.xampp-panel.bak "$LAMPP"/etc/extra/*.xampp-panel.ba
 done
 gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database -q /usr/share/applications 2>/dev/null || true
-if [[ -n ${SUDO_USER:-} ]]; then
-  rm -f -- "$(getent passwd "$SUDO_USER" | cut -d: -f6)/.config/xampp-panel/settings.json"
+if [[ -n ${SUDO_USER:-} ]] && user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)" && [[ -n $user_home ]]; then
+  rm -f -- "$user_home/.config/xampp-panel/settings.json"
 fi
 
 if ((REMOVE_XAMPP)) && [[ -x $LAMPP/uninstall ]]; then
