@@ -237,3 +237,35 @@ the user running the scripts on the host.
 
 Boot autostart, non-apt distros, non-GNOME desktops, editing php.ini/my.cnf
 from the UI, HTTPS certificates for `.local` sites, modifying XAMPP binaries.
+
+## Plan-time refinements (2026-09-23)
+
+Found while planning. Where these conflict with earlier sections, this section wins.
+
+1. **App ID** is `io.github.shiron.XamppPanel` (polkit action
+   `io.github.shiron.xampppanel.helper`), not `org.zorin.*`, so we don't use
+   Zorin's namespace.
+2. **Status detection** reads `/proc/<pid>/comm` + `cmdline` (XAMPP processes
+   have `/opt/lampp` in their command line) and `/proc/net/tcp{,6}` for
+   listening ports. This avoids unreadable PID files owned by `mysql`/`root`.
+   PID files are only used as inotify *triggers*. The states are Running,
+   Starting (process up, port not yet listening), Stopped, and Conflict (port
+   taken by a non-XAMPP program).
+3. **Minimum platform:** Zorin OS 17 / Ubuntu 22.04 (GTK 4.6, libadwaita 1.1,
+   Python 3.10). Newer widgets (`Adw.Banner`, `Gtk.FileDialog`) are used only
+   when present, with fallbacks. `setup.sh` refuses older releases.
+4. **Config changes are reversed by inverse edits**, not by restoring
+   `.bak` files, so lean mode, hardening and vhosts can be toggled
+   independently. `.bak` copies are kept as a safety net and deleted by
+   `uninstall.sh`.
+5. **ACLs are applied as the site owner** (the helper drops to the user's uid
+   to run `setfacl`), so a folder swapped for a symlink can never make root
+   grant access to system files. Nested/overlapping site folders are rejected.
+6. **Default vhost:** the managed vhost file starts with a `localhost`
+   vhost for `/opt/lampp/htdocs`, so `http://localhost` and phpMyAdmin keep
+   working once name-based vhosts exist.
+7. The FTP row has **no log button**, because the ProFTPD log location in
+   XAMPP 8.2 is unconfirmed. The MySQL log falls back to `pkexec … log mysql`
+   when the file isn't readable.
+8. Tests use stdlib `unittest` (pytest isn't installed), so no pip dependencies
+   are needed.
