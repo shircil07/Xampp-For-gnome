@@ -22,7 +22,7 @@ def load(path=None) -> dict:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    return {key: type(default)(data.get(key, default)) for key, default in DEFAULTS.items()}
+    return {key: data[key] if isinstance(data.get(key), type(default)) else default for key, default in DEFAULTS.items()}
 
 
 def save(data: dict, path=None) -> None:

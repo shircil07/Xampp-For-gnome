@@ -32,3 +32,10 @@ class SettingsTest(unittest.TestCase):
 
     def test_config_path_honours_xdg(self):
         self.assertEqual(settings.config_path({"XDG_CONFIG_HOME": "/x"}), Path("/x/xampp-panel/settings.json"))
+
+    def test_wrongly_typed_values_are_rejected(self):
+        self.file.parent.mkdir(parents=True)
+        self.file.write_text('{"tray": "false"}')
+        self.assertEqual(settings.load(self.file), {"tray": False})
+        self.file.write_text('{"tray": 1}')
+        self.assertEqual(settings.load(self.file), {"tray": False})
