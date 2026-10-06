@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# Repair & configure menu for XAMPP Panel. Run with: sudo xampp-repair
+import sys
+
+sys.path.insert(0, "/opt/xampp-panel/lib")
+from xampp_panel.repair import main  # noqa: E402
+
+sys.exit(main())
