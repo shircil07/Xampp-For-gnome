@@ -90,6 +90,7 @@ class RepairApp:
         """Start MySQL if needed. Returns True if this call started it."""
         if self.mysql_running():
             return False
+        print("Starting MySQL (it is needed for this)…", file=sys.stderr)
         self.helper.lampp(["startmysql"])
         for _ in range(MYSQL_START_SECONDS):
             if self.mysql_running():
@@ -114,19 +115,27 @@ class RepairApp:
         return self.root_password
 
     def _new_password(self, prompt: str, allow_skip: bool = False) -> str | None:
+        """Asks twice. Cancel/Esc on either prompt (or an empty first answer when allow_skip)
+        returns None if allow_skip, else raises Cancelled."""
         while True:
             first = self.dialogs.passwordbox(prompt)
             if first is None or (allow_skip and first == ""):
-                if allow_skip:
-                    return None
-                raise Cancelled()
+                return self._cancel(allow_skip)
             problem = password_problem(first)
             if problem:
                 self.dialogs.msgbox(problem)
-            elif self.dialogs.passwordbox("Repeat it:") != first:
-                self.dialogs.msgbox("The passwords don't match. Try again.")
-            else:
+                continue
+            second = self.dialogs.passwordbox("Repeat it:")
+            if second is None:
+                return self._cancel(allow_skip)
+            if second == first:
                 return first
+            self.dialogs.msgbox("The passwords don't match. Try again.")
+
+    @staticmethod
+    def _cancel(allow_skip: bool) -> None:
+        if not allow_skip:
+            raise Cancelled()
 
     def _write(self, path, text: str) -> None:
         if text != path.read_text():
@@ -252,13 +261,16 @@ class RepairApp:
             print(f"MySQL did not start, so its accounts were not set up: {e}\n"
                   "Do it later with: sudo xampp-repair", file=sys.stderr)
             return 1
-        ok = self._step("phpMyAdmin control user", lambda: self._setup_pma(fresh=True), health.FIX_PMA)
-        ok = self._step("MySQL root password", self._first_root_password, health.FIX_ROOT) and ok
+        notes: list[str] = []  # printed at the end, after the last whiptail screen
+        ok = self._step("phpMyAdmin control user", lambda: self._first_pma(notes), health.FIX_PMA)
+        ok = self._step("MySQL root password", lambda: self._first_root_password(notes), health.FIX_ROOT) and ok
         if started:
             try:
                 self.helper.lampp(["stopmysql"])
             except HelperFailure as e:
                 print(f"warning: MySQL did not stop: {e}", file=sys.stderr)
+        for note in notes:
+            print(note)
         return 0 if ok else 1
 
     def _step(self, name: str, step, fix: str) -> bool:
@@ -271,13 +283,27 @@ class RepairApp:
             self.dialogs.msgbox(f"{name} did not work:\n\n{e}\n\nLater: sudo xampp-repair → {fix}")
         return False
 
-    def _first_root_password(self) -> None:
-        current = self._root()
-        new = None
-        if current == "":
-            new = self._new_password("Choose a MySQL root password.\n\nLeave it empty to skip "
-                                     "(the panel will remind you).", allow_skip=True)
-        self._set_root_password(current, new)
+    def _first_pma(self, notes: list[str]) -> None:
+        """Re-running setup.sh keeps a control user that already logs in; otherwise sets it up fresh."""
+        text = self.paths.phpmyadmin_conf.read_text()
+        user = self._pma_user(text)
+        password = pmaconfig.get_value(text, "controlpass")
+        configured = (pmaconfig.get_value(text, "controluser") and password
+                      and pmaconfig.get_value(text, "pmadb") == PMADB)  # what the health check calls set up
+        if configured and self.admin.can_login(user, password, PMADB):
+            notes.append(f"phpMyAdmin control user '{user}': already working, left as it is.")
+            return
+        self._setup_pma(fresh=True)
+
+    def _first_root_password(self, notes: list[str]) -> None:
+        """Only a root without a password is asked for one; an existing password is never asked for here."""
+        if not self.admin.can_login("root", ""):
+            notes.append(f"MySQL root already has a password: kept. "
+                         f"To change it: sudo xampp-repair → {health.FIX_ROOT}")
+            return
+        new = self._new_password("Choose a MySQL root password.\n\nLeave it empty to skip "
+                                 "(the panel will remind you).", allow_skip=True)
+        self._set_root_password("", new)
 
 
 def _exit(signum, frame):

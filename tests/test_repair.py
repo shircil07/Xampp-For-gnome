@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import signal
 import subprocess
@@ -85,6 +87,12 @@ class ChangeRootPasswordTest(RepairCase):
         self.assertFalse(app._attempt(app.change_root_password))
         self.assertEqual(self.admin.executed, [])
 
+    def test_cancel_on_repeat_is_a_cancel_not_a_mismatch(self):
+        app = self.app(NEW, None)
+        self.assertFalse(app._attempt(app.change_root_password))
+        self.assertEqual(self.admin.executed, [])
+        self.assertEqual(self.dialogs.messages(), [])
+
     def test_mysqld_without_port_counts_as_running(self):
         self.mysqld_without_port()
         self.assertFalse(self.app(real_mysql_check=True)._ensure_mysql())
@@ -93,7 +101,7 @@ class ChangeRootPasswordTest(RepairCase):
     def test_starts_mysql_when_stopped(self):
         self.running = False
         app = self.app()
-        with self.assertRaises(repair.RepairError):
+        with self.assertRaises(repair.RepairError), contextlib.redirect_stderr(io.StringIO()):
             app._ensure_mysql()
         self.assertEqual(self.helper.calls[0], ("lampp", ["startmysql"]))
 
@@ -215,33 +223,96 @@ class OtherActionsTest(RepairCase):
 
 
 class FirstInstallTest(RepairCase):
-    def test_sets_everything_up_and_stops_mysql_it_started(self):
+    def first_install(self, app):
+        """Runs first_install; returns (exit code, what it printed to stdout and stderr)."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = app.first_install()
+        return code, out.getvalue() + err.getvalue()
+
+    def passwordboxes(self):
+        return [text for kind, text in self.dialogs.shown if kind == "passwordbox"]
+
+    def working_pma(self, password="kept-token"):
+        text = pmaconfig.set_value(PMA_XAMPP, "controlpass", password)
+        self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(text, "pmadb", "phpmyadmin"))
+
+    def test_fresh_install_sets_everything_up_and_stops_mysql_it_started(self):
         self.running = False
         states = iter([False, True])
         app = self.app(NEW, NEW)
         app.mysql_running = lambda: next(states, True)
-        self.assertEqual(app.first_install(), 0)
+        code, printed = self.first_install(app)
+        self.assertEqual(code, 0)
         self.assertEqual(self.pma("controlpass"), "generated-token")
         self.assertEqual(self.admin.root_password, NEW)
         self.assertEqual(self.admin.anonymous, [])
         self.assertEqual(self.pma("auth_type"), "cookie")
         self.assertEqual(self.helper.calls, [("lampp", ["startmysql"]), ("lampp", ["stopmysql"])])
+        self.assertIn("Starting MySQL", printed)
 
     def test_skipping_password_still_drops_anonymous(self):
-        self.assertEqual(self.app("").first_install(), 0)
+        self.assertEqual(self.first_install(self.app(""))[0], 0)
         self.assertEqual(self.admin.root_password, "")
         self.assertEqual(self.admin.anonymous, [])
         self.assertEqual(self.pma("auth_type"), "config")
         self.assertEqual(self.helper.calls, [])  # MySQL was already running: left running
 
-    def test_existing_root_password_is_kept(self):
+    def test_cancel_on_repeat_skips_the_password(self):
+        self.assertEqual(self.first_install(self.app(NEW, None))[0], 0)
+        self.assertEqual(self.admin.root_password, "")
+        self.assertEqual(self.admin.anonymous, [])
+        self.assertFalse(any("don't match" in m for m in self.dialogs.messages()))
+
+    def test_rerun_keeps_working_pma(self):
+        self.working_pma()
+        code, printed = self.first_install(self.app("", token="unused"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.pma("controlpass"), "kept-token")
+        self.assertFalse(any("CREATE USER" in sql for sql in self.admin.executed))
+        self.assertIn("already working", printed)
+
+    def test_rerun_resets_pma_that_cannot_log_in(self):
+        self.working_pma("stale")
+        logins = iter([False])  # the first login check fails; after the reset it works
+        can_login = self.admin.can_login
+        self.admin.can_login = lambda u, p, d=None: next(logins, True) if u == "pma" else can_login(u, p, d)
+        self.assertEqual(self.first_install(self.app(""))[0], 0)
+        self.assertEqual(self.pma("controlpass"), "generated-token")
+
+    def test_rerun_sets_up_pma_without_pmadb(self):
+        self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(PMA_XAMPP, "controlpass", "kept-token"))
+        self.assertEqual(self.first_install(self.app(""))[0], 0)
+        self.assertEqual(self.pma("pmadb"), "phpmyadmin")
+        self.assertEqual(self.pma("controlpass"), "generated-token")
+
+    def test_rerun_with_root_password_asks_nothing(self):
         self.admin.root_password = "old-pass 1"
-        self.assertEqual(self.app("old-pass 1").first_install(), 0)
+        self.working_pma()
+        code, printed = self.first_install(self.app())  # no scripted answers: any dialog would fail
+        self.assertEqual(code, 0)
         self.assertEqual(self.admin.root_password, "old-pass 1")
+        self.assertIn(health.FIX_ROOT, printed)
+
+    def test_root_password_is_asked_once_when_pma_needs_it(self):
+        self.admin.root_password = "old-pass 1"
+        code, printed = self.first_install(self.app("old-pass 1"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.pma("controlpass"), "generated-token")
+        self.assertEqual(self.admin.root_password, "old-pass 1")
+        self.assertEqual(len(self.passwordboxes()), 1)
+        self.assertIn(health.FIX_ROOT, printed)
+
+    def test_cancelled_root_prompt_is_not_repeated(self):
+        self.admin.root_password = "old-pass 1"
+        code, _ = self.first_install(self.app(None))
+        self.assertEqual(code, 1)  # pma was skipped
+        self.assertEqual(len(self.passwordboxes()), 1)
+        self.assertEqual(self.admin.executed, [])
 
     def test_failed_step_returns_1_and_names_the_fix(self):
         self.admin.fail = "ERROR 2002"
-        self.assertEqual(self.app("").first_install(), 1)
+        self.assertEqual(self.first_install(self.app(""))[0], 1)
         self.assertIn(health.FIX_PMA, self.dialogs.messages()[0])
 
 
