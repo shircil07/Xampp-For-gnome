@@ -8,46 +8,50 @@ want to change the panel. For everyday use, see [USER-GUIDE.md](USER-GUIDE.md).
 - **XAMPP:** 8.2.12 (`xampp-linux-x64-8.2.12-0-installer.run`, MariaDB 10.4.32)
 - **Repo:** https://github.com/shircil07/Xampp-For-gnome (private), branch `master`; local copy `~/Downloads/xampp-panel`
 - **Design history:** `docs/superpowers/specs/2026-09-23-xampp-panel-design.md` (the spec) and
-  `docs/superpowers/plans/2026-09-23-xampp-panel.md` (the task-by-task plan)
+  `docs/superpowers/plans/2026-09-23-xampp-panel.md` (the task-by-task plan); the repair menu added
+  later has its own spec, `docs/superpowers/specs/2026-10-06-repair-menu-design.md`, and plan,
+  `docs/superpowers/plans/2026-10-06-repair-menu.md`
 
 ---
 
-## Handover — 2026-09-23 (evening)
+## Handover — 2026-10-06
 
-State on the original machine (`zbook`) after this session: Apache, MySQL and ProFTPD all start from the
-panel; MySQL listens on `127.0.0.1:3306` again; `mysql_upgrade` has been run.
+Repair & configure menu (`xampp-repair`) shipped. It replaces the `tools/` one-off scripts and
+XAMPP's own `lampp security`, both for first install and for fixing things later.
 
-What broke and why (both caused by XAMPP's own `lampp security` script, not by the panel):
+What the earlier session found broken, and how it's fixed now:
 
-1. **MySQL had TCP switched off** (log: `port: 0`). `lampp security` offers to "turn off network access"
-   and adds `skip-networking` to `my.cnf`. `setup.sh` ran that step *after* `harden on`, so the panel's
-   `bind-address` was defeated. Clients using `127.0.0.1` failed and the panel showed MySQL as
-   "starting…" forever (it waits for port 3306).
-   **Fixed in code:** `harden on` now comments out an active `skip-networking` (reversible, see §4), and
-   `setup.sh` applies harden **after** the password step.
-2. **ProFTPD wouldn't start** (`unknown configuration directive 'function' on line 44`). `lampp security`
-   sets the FTP password by running a PHP snippet; with short tags off, PHP printed the snippet's source
-   and it was pasted into `proftpd.conf` as the `UserPassword daemon` value. **Fixed by hand** (see §11);
-   the broken file is kept as `/opt/lampp/etc/proftpd.conf.broken`.
-3. **phpMyAdmin: `Access denied for user 'pma'@'localhost'` / "Connection for controluser as defined in
-   your configuration failed"** (seen 2026-10-06). `lampp security` wrote a `controlpass` into
-   `/opt/lampp/phpmyadmin/config.inc.php` (line 48; the original blank line 47 commented out) but did not
-   make the MySQL account `pma` match. **Fixed with `tools/fix-pma.sh`** (see §11), which reported `OK`.
-4. **phpMyAdmin: `#1044 - Access denied for user ''@'localhost' to database 'students'`** (2026-10-06).
-   Root still had **no password** and XAMPP's
-   anonymous account `''@'localhost'` (no password, no rights) still existed. With phpMyAdmin's cookie
-   login and `AllowNoPassword = true`, signing in with any user name other than `root` and no password
-   silently logs in as the anonymous account. **Fix: `tools/secure-mysql.sh`** (see §11) drops the
-   anonymous accounts and sets the root password; the panel's banner now points to it instead of
-   `lampp security`.
+1. **MySQL had TCP switched off** (log: `port: 0`). XAMPP's `lampp security` offers to "turn off
+   network access" and adds `skip-networking` to `my.cnf`.
+   **Fixed in code:** `harden on` comments out an active `skip-networking` (reversible, see §4);
+   `xampp-repair` → "Turn MySQL networking back on" does the same from the menu, and the health
+   check flags it. `setup.sh` no longer calls `lampp security` at all (see below).
+2. **ProFTPD wouldn't start** (`unknown configuration directive 'function' on line 44`). `lampp
+   security` sets the FTP password by running a PHP snippet; with short tags off, PHP printed the
+   snippet's source and it was pasted into `proftpd.conf` as the `UserPassword daemon` value.
+   **Fixed:** `xampp-repair` → "Fix FTP config" detects the broken block
+   (`configedit.proftpd_password_broken`), asks for a new password, hashes it with
+   `openssl passwd -6 -stdin` (never on argv) and validates with `proftpd -t` before keeping the
+   change, rolling back otherwise.
+3. **phpMyAdmin: `Access denied for user 'pma'@'localhost'`**. `lampp security` wrote a
+   `controlpass` into `config.inc.php` without making the MySQL account `pma` match.
+   **Fixed:** `xampp-repair` → "Fix phpMyAdmin pma login" (and the first-install flow) always
+   creates/updates the MySQL account to match the config, in that order, and confirms the login
+   works before reporting success.
+4. **phpMyAdmin: `#1044 - Access denied for user ''@'localhost'`**. Root had no password and
+   XAMPP's anonymous account still existed; phpMyAdmin's cookie login with `AllowNoPassword =
+   true` silently logs in as the anonymous account for any other user name.
+   **Fixed:** first install always drops anonymous accounts (`drop_anonymous_sql`); "Change MySQL
+   root password" does the same whenever it runs. The panel's banner now points at the menu
+   instead of `lampp security`.
 
-Still open:
+`setup.sh` no longer runs `lampp security`: it runs `xampp-repair first-install` instead (always
+drops anonymous accounts and sets up the `pma` control user; asks for a root password, skippable).
 
-- `setup.sh` still runs `lampp security` for the password step. Switching it to `tools/secure-mysql.sh`
-  would avoid all four problems above on new installs.
-- A "Repair & configure" menu entry that opens a terminal with these fixes (whiptail menu) is being
-  designed; `tools/` would move into it.
-- No automatic repair of a `proftpd.conf` already broken by `lampp security`.
+Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
+159 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
+to run once on the target machine.
 
 ---
 
@@ -62,7 +66,8 @@ needs `sudo` in a terminal. XAMPP Panel **does not modify XAMPP's binaries**. It
 | `uninstall.sh` | Reverses everything setup did (keeps XAMPP unless `--remove-xampp`) |
 | Control panel (GTK4 + libadwaita) | Start/stop Apache, MySQL, FTP; logs; shortcuts; per-project `.local` sites |
 | Tray icon (GTK3 + AyatanaAppIndicator) | Optional; status icon plus start/stop menu |
-| Root helper (`xampp-helper`) | The **only** code that runs as root, started through `pkexec` (graphical password prompt) |
+| Root helper (`xampp-helper`) | The **only** code that runs as root through `pkexec` (graphical password prompt) |
+| Repair tool (`xampp-repair`) | A whiptail menu, run as root via `sudo` in a terminal, for passwords and known XAMPP config problems; also runs once at first install |
 
 ---
 
@@ -81,7 +86,18 @@ needs `sudo` in a terminal. XAMPP Panel **does not modify XAMPP's binaries**. It
       │                                        ──► edits httpd.conf, my.cnf, proftpd.conf, /etc/hosts
       │                                        ──► setfacl (run as YOU, not root)
       │
-      └─ Tray (GTK3, separate process, only when enabled) ──► same pkexec helper
+      ├─ Tray (GTK3, separate process, only when enabled) ──► same pkexec helper
+      │
+      └─ ☰ "Repair & configure…" ──► opens a terminal running
+                                      `sudo /opt/xampp-panel/bin/xampp-repair`
+                                            │  (also run directly by setup.sh as
+                                            │   `xampp-repair first-install`)
+                                            ▼
+                                      repair.RepairApp (whiptail menu, runs as root)
+                                            │        │            │          │
+                                        Dialogs  MysqlAdmin   pmaconfig   Helper
+                                       (whiptail) (mysql CLI) (config.inc.php  (harden/integrate/
+                                                                text edits)    lean, lampp start/stop)
 ```
 
 Design rules:
@@ -101,21 +117,25 @@ Design rules:
 | `src/xampp_panel/paths.py` | `Paths` dataclass: **every** filesystem location in one place (tests override it) |
 | `src/xampp_panel/fsutil.py` | `atomic_write` (temp file + rename), `backup_once`, `tail` (last 64 KB) |
 | `src/xampp_panel/services.py` | Service list (Apache :80, MySQL :3306, ProFTPD :21), state detection, log paths |
-| `src/xampp_panel/configedit.py` | Pure, reversible text edits for XAMPP/system config files; lean-mode values; vhost and hosts rendering |
+| `src/xampp_panel/configedit.py` | Pure, reversible text edits for XAMPP/system config files; lean-mode values; vhost and hosts rendering; ProFTPD broken-password detection/repair, MySQL networking detection |
 | `src/xampp_panel/sites.py` | `Site(name, path, uid)`, name validation, `sites.json` load/save, `UNSAFE_PATH_CHARS` |
 | `src/xampp_panel/helper.py` | **Root helper**: validation + whitelisted commands |
 | `src/xampp_panel/privileged.py` | Builds the `pkexec` command, turns exit codes into errors |
 | `src/xampp_panel/settings.py` | Per-user settings (`~/.config/xampp-panel/settings.json`, mode 0600) |
 | `src/xampp_panel/watch.py` | inotify watcher + pausable fallback timer (shared by panel and tray) |
-| `src/xampp_panel/window.py` | Main window: Services and Sites pages, log viewer, Add-site dialog |
+| `src/xampp_panel/window.py` | Main window: Services and Sites pages, log viewer, Add-site dialog, ☰ "Repair & configure…" |
 | `src/xampp_panel/app.py` | `Adw.Application`: single instance, menu actions (tray, lean, quit) |
 | `src/xampp_panel/tray.py` | Tray process |
 | `src/xampp_panel/main.py` | Entry point: `--tray` → tray, otherwise panel |
-| `bin/xampp-panel`, `bin/xampp-helper` | Installed launchers (`#!/usr/bin/python3 -I`) |
+| `src/xampp_panel/pmaconfig.py` | Pure text `get`/`set` of single-quoted `$cfg['Servers'][$i][...]` settings in phpMyAdmin's `config.inc.php`; never executes the file |
+| `src/xampp_panel/mysqladmin.py` | `MysqlAdmin`: runs XAMPP's `mysql`/`mysql_upgrade` as root, SQL builders (`drop_anonymous_sql`, `set_root_password_sql`, `pma_account_sql`), password rules, SQL escaping |
+| `src/xampp_panel/dialogs.py` | `Dialogs`: thin whiptail wrapper (menu, yesno, msgbox, passwordbox, `secret`) |
+| `src/xampp_panel/health.py` | `HealthCheck`: read-only report (services, configs, MySQL accounts, phpMyAdmin login, sites) with the menu item that fixes each problem |
+| `src/xampp_panel/repair.py` | `RepairApp`: the `xampp-repair` menu, its flows, and `first-install`; `main()` |
+| `src/xampp_panel/terminal.py` | Picks a terminal emulator and builds its argv for "Repair & configure…" (pure, no GTK) |
+| `bin/xampp-panel`, `bin/xampp-helper`, `bin/xampp-repair` | Installed launchers (`#!/usr/bin/python3 -I`) |
 | `data/` | `.desktop` file, polkit policy, SVG icons |
 | `tests/` | stdlib `unittest` suite |
-| `tools/fix-pma.sh`, `tools/fix-pma.php` | One-off repair for the phpMyAdmin `pma` control user (§11). Not installed by `setup.sh` |
-| `tools/secure-mysql.sh` | Sets the MariaDB root password on all root accounts, drops all anonymous accounts and, if phpMyAdmin logs in automatically (`auth_type = 'config'`), switches it to its login page; without `lampp security` (§11). Not installed by `setup.sh` |
 
 ---
 
@@ -128,6 +148,8 @@ Design rules:
 | `/opt/xampp-panel/lib/xampp_panel/` | root, 0755/0644 | Python code (plus compiled `.pyc`) |
 | `/opt/xampp-panel/bin/xampp-panel` | root, 0755 | Panel launcher |
 | `/opt/xampp-panel/bin/xampp-helper` | root, 0755 | Root helper launcher |
+| `/opt/xampp-panel/bin/xampp-repair` | root, 0755 | Repair tool launcher |
+| `/usr/local/bin/xampp-repair` | symlink | So `sudo xampp-repair` works in a terminal |
 | `/opt/xampp-panel/state/sites.json` | root, 0644 | List of sites (world-readable so the panel can list them) |
 | `/opt/xampp-panel/install-manifest.txt` | root | Files outside `/opt/xampp-panel` that uninstall must delete |
 | `/usr/share/polkit-1/actions/io.github.shiron.xampppanel.policy` | root, 0644 | Password-prompt policy |
@@ -151,7 +173,9 @@ Before the first change, each file gets a copy named `<file>.xampp-panel.bak`.
 | same | Active `skip-networking` commented out (restored by `harden off`) | `# xampp-panel: was "skip-networking"` |
 | same | `!include` for lean mode (only if on) | `# BEGIN xampp-panel lean` |
 | `/opt/lampp/etc/proftpd.conf` | `DefaultAddress 127.0.0.1` + `SocketBindTight on` | `# BEGIN xampp-panel localhost` |
+| same | `UserPassword daemon` replaced with a new hash (`xampp-repair` → "Fix FTP config" only, not `setup.sh`) | none; detected by `configedit.proftpd_password_broken` |
 | `/etc/hosts` | `127.0.0.1  <name>.local` for each site | `# BEGIN xampp-panel sites` |
+| `/opt/lampp/phpmyadmin/config.inc.php` | `auth_type`, `controluser`, `controlpass`, `pmadb` set/updated by `xampp-repair` (text edit via `pmaconfig.py`; owner kept, see `fsutil.atomic_write`) | none; read back with `pmaconfig.get_value` |
 
 Files it creates inside XAMPP:
 
@@ -230,6 +254,36 @@ pkexec /opt/xampp-panel/bin/xampp-helper site-add demo "$HOME/Sites/demo"; echo 
 **Accepted limitation:** every site's PHP runs as `daemon` and can read anything `daemon` can read,
 including your other sites. That's normal for XAMPP and fine on a single-user computer.
 
+### `xampp-repair`'s security model
+
+- **Runs as root only via `sudo`** in a terminal the user opened (or directly by `setup.sh` as
+  root); `main()` in `repair.py` refuses to proceed if `os.geteuid() != 0`. There is no `pkexec`
+  action for it — the whole tool is one program, not a set of whitelisted commands, because it is
+  always run interactively by a human who already has root.
+- **Passwords never touch argv or the environment:**
+  - MySQL root/`pma` passwords and all SQL go to `mysql`/`mysql_upgrade` on **stdin**; the
+    username/password pair goes in a `tempfile.mkstemp` `--defaults-extra-file` (mode 0600),
+    deleted in a `finally` (`mysqladmin.MysqlAdmin._client`).
+  - The FTP password is piped to `openssl passwd -6 -stdin`, never passed as an argument.
+  - Every SQL batch containing an escaped value starts with
+    `SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')`, so `\`/`'` escaping
+    means the same thing regardless of the server's configured `sql_mode`.
+  - MySQL account lists (which accounts to drop/alter) are built by MariaDB itself
+    (`GROUP_CONCAT` over `mysql.user` + `EXECUTE IMMEDIATE`), not assembled in Python, so there is
+    one query to audit instead of string-built `DROP USER`/`ALTER USER` statements per account.
+- **`config.inc.php` is parsed as text, never executed** (`pmaconfig.py`): only single-quoted
+  `$cfg['Servers'][$i]['key'] = '...';` assignments are read or written, with PHP's own `\\`/`\'`
+  escaping. No `php` or `eval` is invoked.
+- **`pma` gets least privilege:** `SELECT, INSERT, UPDATE, DELETE` on `phpmyadmin.*` only, never
+  `GRANT OPTION` or access to any other database.
+- **Deviation from the design spec:** "Show phpMyAdmin pma password" uses `Dialogs.secret`
+  (writes the text to a 0600 temp file and shows it with `whiptail --textbox`, deleting the file
+  afterwards) instead of `whiptail --msgbox`. A `--msgbox` argument lands on the process's argv,
+  which anyone on the machine can read from `/proc/<pid>/cmdline` while the dialog is open; a
+  private temp file does not have that problem. The design doc's component list already named
+  `textbox` as one of the wrapped dialogs; this is the only screen that uses it instead of
+  `msgbox` for that reason.
+
 ---
 
 ## 7. How status detection works
@@ -291,7 +345,18 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `87b68c1` | Final review fixes: lean values, keep backups when a revert fails, surface helper warnings, pkexec 127 message, wildcard path chars |
 | `23307a9` | Host fix: detect XAMPP processes whose comm is a truncated path |
 | `64dcc65` | Host fix: `harden on` replaces `skip-networking`; `setup.sh` hardens after `lampp security`; banner warning |
-| (after `64dcc65`) | `tools/fix-pma.sh` (pma control user) and `tools/secure-mysql.sh` (root password, anonymous accounts); banner points to `secure-mysql.sh` |
+| `326e82f` | `tools/fix-pma.sh`/`fix-pma.php` and `tools/secure-mysql.sh`: one-off scripts for the pma control user and root password/anonymous accounts (superseded below) |
+| `cee3d20`, `3450fda`, `9afd8e8` | `fsutil.atomic_write` keeps the file's owner; new paths for the repair tool |
+| `2fa2c5a` | `pmaconfig.py`: read/write phpMyAdmin's `config.inc.php` as text |
+| `e9556f3` | `mysqladmin.py`: SQL builders and a `mysql`/`mysql_upgrade` client runner that keeps passwords off argv and in a 0600 defaults file |
+| `1dc0533` | `configedit.py`: detect/repair the FTP password breakage and MySQL networking |
+| `0c49c2b` | `dialogs.py` (whiptail wrapper) and shared test fakes |
+| `3873a06` | `health.py`: read-only health report, each finding naming its fix |
+| `2e87555` | `repair.py` (`RepairApp`, `bin/xampp-repair`): the menu, its flows, `first-install`; account setup moved out of `tools/` |
+| `499ca04` | Security fix: "Show phpMyAdmin pma password" uses a 0600 tempfile + `--textbox`, not a `--msgbox` argument (passwords must never be on a process's argv) |
+| `6721c49` | `setup.sh` runs `xampp-repair first-install` instead of `lampp security` |
+| `8770da2` | Panel ☰ "Repair & configure…" opens a terminal running `sudo xampp-repair` (`terminal.py`) |
+| this task | `tools/` deleted; its tests removed; README/MAINTAINER/USER-GUIDE/spec updated to match |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -319,10 +384,12 @@ Decisions made during the build (and what they cost if wrong):
 | The FTP row has no log button (ProFTPD log location in XAMPP 8.2 unconfirmed) | Look in `/opt/lampp/logs/` and `/opt/lampp/var/` |
 | A log line longer than 64 KB shows as empty in the log viewer | Read the file directly |
 | If `/etc/hosts` is a symlink (rare), editing it replaces the link with a regular file | Not an issue on Zorin |
-| MariaDB warns `Incorrect definition of table mysql.event` / `mysql.column_stats` / `Please run mysql_upgrade` | Old system tables from an earlier install: `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if a password is set) |
-| XAMPP's `lampp security` breaks things: its "turn off MySQL network access" adds `skip-networking`, and its FTP password step writes PHP source into `proftpd.conf` | Answer **no** to both questions. Fixes for both are in §11 |
-| `Access denied for user 'pma'@'localhost'` in the MySQL log or phpMyAdmin | Caused by `lampp security`. Run `bash tools/fix-pma.sh` (§11) |
-| XAMPP ships an anonymous MariaDB account and no root password | Run `bash tools/secure-mysql.sh` (§11) |
+| MariaDB warns `Incorrect definition of table mysql.event` / `mysql.column_stats` / `Please run mysql_upgrade` | `sudo xampp-repair` → "Run mysql_upgrade" |
+| XAMPP's own `lampp security` would break things (`skip-networking`, FTP config). **Not run any more**: `setup.sh` runs `xampp-repair first-install` instead | Nothing to do on a fresh install. If you ran `lampp security` by hand, see the next three rows |
+| `Access denied for user 'pma'@'localhost'` in the MySQL log or phpMyAdmin | `sudo xampp-repair` → "Fix phpMyAdmin pma login" (§11) |
+| XAMPP ships an anonymous MariaDB account and no root password | `sudo xampp-repair` → "Change MySQL root password" (§11) |
+| MySQL stuck "starting…", log says `port: 0` (`skip-networking` active) | `sudo xampp-repair` → "Turn MySQL networking back on" |
+| FTP won't start: `unknown configuration directive 'function'` | `sudo xampp-repair` → "Fix FTP config" |
 | Starting `xampp-panel` from SSH/remote terminal fails with "Gtk couldn't be initialized" | Normal: there's no display. Open it from the app menu. Errors are then in `journalctl --user` |
 | `shellcheck` was never run on the scripts | `shellcheck setup.sh uninstall.sh` |
 
@@ -337,17 +404,21 @@ Anything else goes to the user journal:
 journalctl --user --since "10 min ago" | grep -iA25 xampp
 ```
 
+For anything below involving MySQL accounts, phpMyAdmin or ProFTPD, `sudo xampp-repair` →
+**"Health check"** is a good first step: a read-only report of services, config problems, MySQL
+accounts and phpMyAdmin's login, each naming the menu item that fixes it.
+
 | Symptom | Likely cause | Check / fix |
 |---|---|---|
 | Switch flips back, no message | Password dialog closed (exit 126) | Try again and enter your password |
 | "Not authorized, or the XAMPP Panel helper is missing" | Wrong password, or `/opt/xampp-panel/bin/xampp-helper` missing / not executable | `ls -l /opt/xampp-panel/bin/`; re-run `sudo ./setup.sh` |
 | "port used by another program" | Another server (Ubuntu's `apache2`, `nginx`, `mysql`), **or** a detection problem | `sudo ss -ltnp 'sport = :80'`. If it names `/opt/lampp/...`, it's XAMPP (see §7) |
 | phpMyAdmin: `mysqli::real_connect(): (HY000/2002): No such file or directory` | MySQL isn't running (its socket file is missing) | Start MySQL; if it won't start, see the MySQL log |
-| phpMyAdmin: `Access denied for user 'pma'@'localhost'` / "Connection for controluser … failed" | `lampp security` set `controlpass` in `config.inc.php` but not on the MySQL `pma` account | `bash tools/fix-pma.sh` from the repo (asks for sudo and the MySQL root password; prints `OK` or `FAILED`). It creates the `phpmyadmin` storage tables if missing, creates/updates `pma` with the config's password (read by PHP, never on a command line) and grants it `SELECT, INSERT, UPDATE, DELETE` on that database only. Safe to re-run |
-| phpMyAdmin: `#1044 - Access denied for user ''@'localhost' to database …` | Logged in as MariaDB's anonymous account: a user name other than `root` with no password matches `''@'localhost'` (needs root without a password, the anonymous account, and `AllowNoPassword`) | Right now: log out of phpMyAdmin and log in as `root`. For good: `bash tools/secure-mysql.sh`. Prompts in order: sudo password, new root password twice (8–128 characters), current root password (Enter if none), new root password once more to list the remaining accounts. MariaDB itself lists the accounts (`EXECUTE IMMEDIATE` over `mysql.user`), so every `''@<host>` is dropped and every `root@<host>` gets the password, all in one session. If phpMyAdmin's `auth_type` is `config` (auto-login as root), it is switched to `cookie` **after** the password change succeeded, with a one-time backup `config.inc.php.xampp-panel.bak`. If a statement fails, `mysql` stops there: at worst the anonymous accounts are gone and root is unchanged. Then log in to phpMyAdmin as `root` with the new password |
+| phpMyAdmin: `Access denied for user 'pma'@'localhost'` / "Connection for controluser … failed" | `lampp security` (or a broken config) set `controlpass` in `config.inc.php` but not on the MySQL `pma` account | `sudo xampp-repair` → **"Fix phpMyAdmin pma login"**. Creates the `phpmyadmin` storage tables if missing, creates/updates `pma` with the config's password (never on a command line) and grants it `SELECT, INSERT, UPDATE, DELETE` on that database only; confirms the login works before reporting success. Safe to re-run |
+| phpMyAdmin: `#1044 - Access denied for user ''@'localhost' to database …` | Logged in as MariaDB's anonymous account: a user name other than `root` with no password matches `''@'localhost'` (needs root without a password, the anonymous account, and `AllowNoPassword`) | Right now: log out of phpMyAdmin and log in as `root`. For good: `sudo xampp-repair` → **"Change MySQL root password"**. Asks for the current root password (Enter if none), then the new one twice (8–128 characters). MariaDB itself lists the accounts (`EXECUTE IMMEDIATE` over `mysql.user`), so every `''@<host>` is dropped and every `root@<host>` gets the password, in one `mysql` session. If phpMyAdmin's `auth_type` is `config` (auto-login as root), it is switched to `cookie` **after** the password change succeeded, with a one-time backup `config.inc.php.xampp-panel.bak`. If a statement fails, `mysql` stops there: at worst the anonymous accounts are gone and root is unchanged. Then log in to phpMyAdmin as `root` with the new password |
 | MySQL won't start | See its log | `sudo tail -n 40 /opt/lampp/var/mysql/$(hostname).err` |
-| MySQL stuck on "starting…"; log says `port: 0` | `skip-networking` active in `my.cnf` (added by `lampp security`) | `sudo grep -n networking /opt/lampp/etc/my.cnf`; then `sudo /opt/xampp-panel/bin/xampp-helper harden on` and `sudo /opt/lampp/lampp stopmysql && sudo /opt/lampp/lampp startmysql` |
-| FTP won't start: `unknown configuration directive 'function'` | `lampp security` wrote PHP source into `proftpd.conf` | `HASH=$(openssl passwd -6) && sudo sed -i '/^UserPassword daemon <?/,/^?>/c\UserPassword daemon '"$HASH" /opt/lampp/etc/proftpd.conf`, then `sudo /opt/lampp/sbin/proftpd -t -c /opt/lampp/etc/proftpd.conf` |
+| MySQL stuck on "starting…"; log says `port: 0` | `skip-networking` active in `my.cnf` | `sudo xampp-repair` → **"Turn MySQL networking back on"** (equivalent to `xampp-helper harden on` plus a MySQL restart offer). Manual fallback: `sudo grep -n networking /opt/lampp/etc/my.cnf`; then `sudo /opt/xampp-panel/bin/xampp-helper harden on` and `sudo /opt/lampp/lampp stopmysql && sudo /opt/lampp/lampp startmysql` |
+| FTP won't start: `unknown configuration directive 'function'` | `lampp security` wrote PHP source into `proftpd.conf` | `sudo xampp-repair` → **"Fix FTP config"**. Detects the broken block, asks for a new FTP password for the `daemon` user, hashes it with `openssl passwd -6 -stdin` (never on argv), writes it back (one-time backup) and validates with `proftpd -t`, restoring the old config if that fails |
 | Apache won't start | Config error | `sudo /opt/lampp/bin/apachectl -t`; `sudo tail -n 40 /opt/lampp/logs/error_log` |
 | `http://name.local` "site can't be reached" | Site not created, or name not resolving | `grep -A5 "BEGIN xampp-panel sites" /etc/hosts`; `cat /opt/xampp-panel/state/sites.json`; `getent hosts name.local` |
 | `name.local` gives **403 Forbidden** | Apache can't read the folder | `getfacl ~/Sites/name \| grep daemon`; remove and re-add the site |
@@ -439,7 +510,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 88 tests; GUI import test needs PyGObject; fix-pma tests need a PHP CLI (php on PATH or XAMPP_TEST_PHP=/opt/lampp/bin/php)
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 159 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 
@@ -467,3 +538,22 @@ Add a `Service(...)` to `SERVICES` in `services.py` (key, title, description, po
 
 Only in `paths.py`. `test_paths.py` pins the defaults. The polkit policy (`data/…policy`) and the
 `.desktop` file contain the helper and launcher paths too; `test_data.py` checks that they match.
+
+### Adding an `xampp-repair` fix
+
+1. Write the pure logic first: a detector (`configedit.py` or a new read in `health.py`/`pmaconfig.py`)
+   and, if it touches MySQL, a SQL builder in `mysqladmin.py` (escape with `sql_quote`, start the
+   batch with the `sql_mode` guard if it contains an escaped value).
+2. Add a method to `RepairApp` in `repair.py`: read state, ask with `self.dialogs.*`, apply the change
+   with `self._write(path, new_text)` (backs up once, writes atomically) or `self.admin.execute(sql,
+   self._root())`, then confirm it worked before showing success. Let `RepairError`/`MysqlError`/
+   `HelperFailure` propagate — `_attempt` catches them and shows a msgbox; don't swallow errors yourself.
+3. Add it to `menu_items()`. If the health check should flag the problem, add a `FIX_*` label constant
+   in `health.py` and a `Finding` in `HealthCheck`, reusing that label so the two stay in sync.
+4. Test `repair.py`'s method with `FakeDialogs` (script the answers) and a fake admin/helper (assert
+   ordering and the failure path); test any new `configedit`/`mysqladmin`/`pmaconfig` function on its
+   own first. `tests/fakes.py` has the shared fakes.
+5. If it's relevant during a fresh install, call it from `first_install()` via `self._step(name, step,
+   fix_label)` so a failure is reported but doesn't abort `setup.sh`.
+6. Document it: one line in the "Main menu" table (§ design spec or here), and a troubleshooting row
+   in §11 / `docs/USER-GUIDE.md` pointing at the new menu item.

@@ -6,6 +6,7 @@ A native control panel for XAMPP on Zorin OS (and other GNOME / Ubuntu 22.04+ sy
 - Add local sites like `http://blog.local` served from `~/Sites/blog`.
 - XAMPP only listens on this computer by default. Optional lean mode runs fewer idle processes.
 - Optional tray icon. Nothing runs at boot.
+- Repair & configure menu (☰) for passwords and known XAMPP problems; also available as `sudo xampp-repair`.
 
 ## Documentation
 

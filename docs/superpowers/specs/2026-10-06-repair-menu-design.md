@@ -1,6 +1,6 @@
 # Repair menu and safe first-install passwords — design
 
-Date: 2026-10-06. Status: approved in chat, spec awaiting review.
+Date: 2026-10-06. Status: implemented.
 
 ## Problem
 
@@ -102,6 +102,9 @@ Refuses to run unless root. The root password, once entered, is kept in memory f
 | Run mysql_upgrade | With the root password via the defaults file. |
 | Re-apply panel config | `integrate on`; `harden on` only if `my.cnf` still has the panel's `bind-address` marker (otherwise LAN mode was chosen and is left alone); `lean on` only if `httpd.conf` has the `lean` block. |
 | Quit | |
+
+**Deviation (recorded):** "Re-apply panel config" asks two yes/no questions (localhost only,
+lean mode) instead of detecting markers, because a XAMPP upgrade removes them too.
 
 MySQL-dependent items start MySQL first if it isn't running (and say so).
 

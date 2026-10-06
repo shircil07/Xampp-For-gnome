@@ -71,17 +71,8 @@ It then remembers it for a few minutes.
 - **Open htdocs folder:** `/opt/lampp/htdocs`, the classic XAMPP web folder (needs admin rights to edit).
 - **Open Sites folder:** `~/Sites`, where your own projects live (you can edit freely).
 
-A yellow bar at the top means **MySQL has no password**. Fix it from the XAMPP Panel source folder
-(the folder you ran `setup.sh` from):
-
-```bash
-bash tools/secure-mysql.sh
-```
-
-It asks, in this order, for: your computer (sudo) password, a new root password twice, the current root
-password (just press Enter if there is none), and the new password once more to show the remaining
-accounts. It also removes MySQL's anonymous accounts. If phpMyAdmin used to open without asking for a
-password, it now shows a login page. Log in there as `root` with the new password.
+A yellow bar at the top means **MySQL has no password**. Fix it from
+**☰ → Repair & configure → Change MySQL root password** (see below).
 
 Don't use XAMPP's own `sudo /opt/lampp/lampp security` for this: its MySQL network and FTP options are
 broken in XAMPP 8.2 and stop MySQL or FTP working.
@@ -115,12 +106,36 @@ Rules for folders:
 
 | Item | What it does |
 |---|---|
+| Repair & configure… | Opens a terminal with the repair menu (below). Asks for your password (sudo). |
 | Keep in tray when closed | Shows a small XAMPP icon in the top bar with Start/Stop/Open. Needs the AppIndicator extension; the item says so if it's missing. |
 | Lean mode (uses less memory) | Fewer background Apache processes and a smaller MySQL. Restart Apache and MySQL afterwards. |
 | Quit | Closes the panel. Apache and MySQL keep running until you stop them. |
 
 Closing the panel does **not** stop your servers. Nothing starts automatically when the computer boots.
 Open the panel and press **Start** when you want to work.
+
+---
+
+## Repair & configure
+
+Open it from **☰ → Repair & configure…**, or type `sudo xampp-repair` in a terminal. It opens in a
+terminal window with a text menu (use the arrow keys, Enter to choose, Esc to cancel). Use it for
+MySQL/phpMyAdmin passwords and to fix the known ways XAMPP's own `lampp security` tool breaks things.
+
+| Menu item | What it's for |
+|---|---|
+| Health check | A read-only report: are Apache/MySQL/FTP running and their configs valid, does MySQL have anonymous accounts or a password, can phpMyAdmin log in, are your sites set up. Each problem it finds names the menu item below that fixes it. |
+| Change MySQL root password | Sets (or changes) the MySQL admin password, and removes XAMPP's unprotected "anonymous" account. Do this if the yellow bar is showing, or after `#1044 Access denied for user ''@'localhost'` in phpMyAdmin. |
+| Show phpMyAdmin pma password | Shows the generated password of phpMyAdmin's own internal account (`pma`). You almost never need to type this yourself — it's for checking the account still has one, or copying it somewhere you manage MariaDB. |
+| Fix phpMyAdmin pma login | Repairs `Access denied for user 'pma'@'localhost'`: recreates phpMyAdmin's internal account to match its own config. |
+| Fix FTP config | Repairs `unknown configuration directive 'function'`, caused by XAMPP's `lampp security` writing broken text into the FTP config. Asks for a new FTP password for the user `daemon`. |
+| Turn MySQL networking back on | Repairs MySQL staying on "starting…" with its log saying `port: 0`. |
+| Run mysql_upgrade | Fixes MariaDB warnings like `Please run mysql_upgrade` after an update. |
+| Re-apply panel config | Puts back the panel's site list, localhost-only settings and lean mode, in case an XAMPP reinstall removed them. |
+| Quit | Closes the menu and the terminal. |
+
+It's safe to open the menu and look around — nothing changes until you choose an item that makes a
+change, and most ask you to confirm first.
 
 ---
 
@@ -157,11 +172,11 @@ Before `--remove-xampp`, export any databases you want to keep: phpMyAdmin → E
 | "Not authorized, or the XAMPP Panel helper is missing" | Wrong password, or the install is broken. Re-run `sudo ./setup.sh`. |
 | 🔴 "port used by another program" | Something else uses that port. Run `sudo ss -ltnp 'sport = :80'` (or `:3306`) to see what. |
 | phpMyAdmin says `(HY000/2002): No such file or directory` | MySQL isn't running. Switch it on. |
-| phpMyAdmin says `Access denied for user 'pma'@'localhost'` or "Connection for controluser … failed" | `lampp security` left phpMyAdmin's helper account with the wrong password. From the project folder run `bash tools/fix-pma.sh`. It asks for your computer (sudo) password, then your MySQL root password, and should print `OK`. |
-| phpMyAdmin says `#1044 - Access denied for user ''@'localhost'` when creating a database | You're logged in under the wrong user name. Log out of phpMyAdmin and log in as `root`. To stop it happening, run `bash tools/secure-mysql.sh` (see the yellow bar above). |
-| MySQL log mentions `Please run mysql_upgrade` or `mysql.column_stats` | Run `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if you set a password), then restart MySQL. |
-| MySQL stays yellow ("starting…") and its log says `port: 0` | Run `sudo /opt/xampp-panel/bin/xampp-helper harden on`, then switch MySQL off and on. |
-| FTP won't start; its error mentions `'function'` | `lampp security` damaged the FTP config. See "Troubleshooting" in [MAINTAINER.md](MAINTAINER.md) §11. |
+| phpMyAdmin says `Access denied for user 'pma'@'localhost'` or "Connection for controluser … failed" | **☰ → Repair & configure → Fix phpMyAdmin pma login.** |
+| phpMyAdmin says `#1044 - Access denied for user ''@'localhost'` when creating a database | You're logged in under the wrong user name. Log out of phpMyAdmin and log in as `root`. To stop it happening, **☰ → Repair & configure → Change MySQL root password** (see the yellow bar above). |
+| MySQL log mentions `Please run mysql_upgrade` or `mysql.column_stats` | **☰ → Repair & configure → Run mysql_upgrade.** |
+| MySQL stays yellow ("starting…") and its log says `port: 0` | **☰ → Repair & configure → Turn MySQL networking back on.** |
+| FTP won't start; its error mentions `'function'` | **☰ → Repair & configure → Fix FTP config.** |
 | `http://name.local` "can't be reached" | Check the site is listed in the Sites tab. If it is and Chrome still fails, turn off Chrome's "Use secure DNS" or try Firefox. |
 | `name.local` says **Forbidden** | Remove the site and add it again. |
 | Running `xampp-panel` in a remote/SSH terminal says "Gtk couldn't be initialized" | Normal: there's no screen there. Open it from the app menu. |
