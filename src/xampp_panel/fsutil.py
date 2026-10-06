@@ -25,7 +25,9 @@ def atomic_write(path, text: str, mode: int | None = None) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             if owner is not None:
-                os.fchown(fh.fileno(), *owner)  # root rewriting a daemon-owned file must not take it over
+                temp_stat = os.fstat(fh.fileno())
+                if owner != (temp_stat.st_uid, temp_stat.st_gid):
+                    os.fchown(fh.fileno(), *owner)  # root rewriting a daemon-owned file must not take it over
             os.fchmod(fh.fileno(), mode)
             fh.write(text)
             fh.flush()
