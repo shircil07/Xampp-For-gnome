@@ -157,7 +157,8 @@ class RepairApp:
             self.dialogs.msgbox(f"phpMyAdmin's control user is not set up yet. Use “{health.FIX_PMA}”.")
             return
         if self.dialogs.yesno("This shows a password on screen. Continue?"):
-            self.dialogs.msgbox(f"phpMyAdmin control user\n\nUser:     {user}\nPassword: {password}\n\n"
+            self.dialogs.secret("phpMyAdmin control user",
+                                f"User:     {user}\nPassword: {password}\n\n"
                                 "phpMyAdmin uses this account itself; you never need to type it.")
 
     def fix_pma(self) -> None:

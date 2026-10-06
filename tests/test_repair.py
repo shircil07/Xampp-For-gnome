@@ -116,8 +116,10 @@ class PmaTest(RepairCase):
         self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(PMA_XAMPP, "controlpass", "s3cret"))
         self.app(False).show_pma_password()
         self.assertEqual(self.dialogs.messages(), [])
+        self.assertEqual(self.dialogs.secrets(), [])
         self.app(True).show_pma_password()
-        self.assertIn("s3cret", self.dialogs.messages()[0])
+        self.assertEqual(self.dialogs.messages(), [])
+        self.assertIn("s3cret", self.dialogs.secrets()[0])
 
 
 class FtpTest(RepairCase):

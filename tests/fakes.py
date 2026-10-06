@@ -30,8 +30,14 @@ class FakeDialogs:
     def msgbox(self, text):
         self.shown.append(("msgbox", text))
 
+    def secret(self, title, text):
+        self.shown.append(("secret", text))
+
     def messages(self):
         return [text for kind, text in self.shown if kind == "msgbox"]
+
+    def secrets(self):
+        return [text for kind, text in self.shown if kind == "secret"]
 
 
 class FakeAdmin:

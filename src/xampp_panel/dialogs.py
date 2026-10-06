@@ -1,6 +1,8 @@
 """whiptail dialog boxes for xampp-repair. whiptail draws on the terminal and writes the answer to stderr."""
 
+import os
 import subprocess
+import tempfile
 
 TITLE = "XAMPP repair & configure"
 
@@ -29,3 +31,18 @@ class Dialogs:
 
     def passwordbox(self, text: str) -> str | None:
         return self._answer("--passwordbox", text, *self.size)
+
+    def secret(self, title: str, text: str) -> None:
+        """Show `text` in a scrolling box without it ever appearing on a process's argv (e.g. a password).
+
+        whiptail's own text arguments land on its argv, which anyone can read from /proc while
+        the dialog is open; a file (mode 0600, owned by the caller) does not have that problem.
+        """
+        fd, path = tempfile.mkstemp(prefix="xampp-repair-", suffix=".txt")  # mode 0600
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            self.run(["whiptail", "--title", title, "--scrolltext", "--textbox", path, *self.size],
+                     stderr=subprocess.PIPE, text=True)
+        finally:
+            os.unlink(path)

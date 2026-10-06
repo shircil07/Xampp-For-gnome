@@ -1,3 +1,5 @@
+import os
+import stat
 import subprocess
 import unittest
 
@@ -38,3 +40,23 @@ class DialogsTest(unittest.TestCase):
         run = Run()
         Dialogs(run).msgbox("Hello")
         self.assertEqual(run.calls[0][0][3:], ["--scrolltext", "--msgbox", "Hello", "20", "74"])
+
+    def test_secret_keeps_text_off_argv_uses_a_0600_file_and_removes_it(self):
+        seen = {}
+
+        def run(argv, **kwargs):
+            self.assertNotIn("s3cret-text", argv)
+            self.assertEqual(argv[:5], ["whiptail", "--title", "Title", "--scrolltext", "--textbox"])
+            path = argv[5]
+            self.assertEqual(argv[6:], ["20", "74"])
+            self.assertEqual(kwargs["stderr"], subprocess.PIPE)
+            self.assertTrue(kwargs["text"])
+            seen["path"] = path
+            self.assertTrue(os.path.exists(path))
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "s3cret-text")
+            return subprocess.CompletedProcess(argv, 0, None, "")
+
+        Dialogs(run).secret("Title", "s3cret-text")
+        self.assertFalse(os.path.exists(seen["path"]))
