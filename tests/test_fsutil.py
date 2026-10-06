@@ -27,7 +27,8 @@ class AtomicWriteTest(FsutilCase):
         p = self.dir / "a.txt"
         p.write_text("old")
         p.chmod(0o600)
-        fsutil.atomic_write(p, "new")
+        with mock.patch("os.fchown"):  # Mock fchown since we can't actually chown as non-root
+            fsutil.atomic_write(p, "new")
         self.assertEqual(p.read_text(), "new")
         self.assertEqual(p.stat().st_mode & 0o777, 0o600)
 
@@ -78,8 +79,7 @@ class AtomicWriteOwnerTest(unittest.TestCase):
             path.write_text("old")
             st = path.stat()
             calls = []
-            real_fchown = os.fchown
-            with mock.patch("os.fchown", side_effect=lambda fd, uid, gid: calls.append((uid, gid)) or real_fchown(fd, uid, gid)):
+            with mock.patch("os.fchown", side_effect=lambda fd, uid, gid: (calls.append((uid, gid)), None)[1]):
                 fsutil.atomic_write(path, "new")
             self.assertEqual(calls, [(st.st_uid, st.st_gid)])
             self.assertEqual(path.read_text(), "new")
@@ -89,3 +89,16 @@ class AtomicWriteOwnerTest(unittest.TestCase):
             with mock.patch("os.fchown") as fchown:
                 fsutil.atomic_write(Path(d) / "new.conf", "x")
             fchown.assert_not_called()
+
+    def test_fchown_failure_aborts_write_and_preserves_original(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.inc.php"
+            path.write_text("original")
+            with mock.patch("os.fchown", side_effect=PermissionError("Operation not permitted")):
+                with self.assertRaises(PermissionError):
+                    fsutil.atomic_write(path, "new content")
+            # Original file unchanged
+            self.assertEqual(path.read_text(), "original")
+            # No temp file left behind
+            temp_files = [f for f in os.listdir(d) if f.startswith(f".{path.name}.")]
+            self.assertEqual(temp_files, [])
