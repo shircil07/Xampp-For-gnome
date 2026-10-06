@@ -1,4 +1,6 @@
 import os
+import signal
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +123,23 @@ class PmaTest(RepairCase):
         self.assertFalse(app._attempt(app.fix_pma))
         self.assertEqual(self.admin.executed, [])
 
+    def test_controluser_root_is_refused(self):
+        for user in ("root", "ROOT"):
+            with self.subTest(user=user):
+                self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(PMA_XAMPP, "controluser", user))
+                app = self.app()
+                self.assertFalse(app._attempt(app.fix_pma))
+                self.assertEqual(self.admin.executed, [])
+                self.assertIn(f"controluser is '{user}'", self.dialogs.messages()[-1])
+
+    def test_odd_controluser_is_refused(self):
+        for user in ("pma'@'%", "a" * 33, "pma user"):
+            with self.subTest(user=user):
+                self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(PMA_XAMPP, "controluser", user))
+                app = self.app()
+                self.assertFalse(app._attempt(app.fix_pma))
+                self.assertEqual(self.admin.executed, [])
+
     def test_login_still_failing_is_reported(self):
         self.admin.pma_login = False
         app = self.app()
@@ -152,6 +171,15 @@ class FtpTest(RepairCase):
         self.assertFalse(app._attempt(app.fix_ftp))
         self.assertEqual(self.paths.proftpd_conf.read_text(), before)
         self.assertIn("Fatal: bad config", self.dialogs.messages()[-1])
+
+
+    def test_openssl_timeout_is_reported(self):
+        self.run.answers["openssl"] = subprocess.TimeoutExpired(["openssl"], 30)
+        before = self.paths.proftpd_conf.read_text()
+        app = self.app("ftp-pass 1", "ftp-pass 1")
+        self.assertFalse(app._attempt(app.fix_ftp))
+        self.assertIn("timed out", self.dialogs.messages()[-1])
+        self.assertEqual(self.paths.proftpd_conf.read_text(), before)
 
 
 class OtherActionsTest(RepairCase):
@@ -226,6 +254,15 @@ class MenuAndMainTest(RepairCase):
 
     def test_escape_quits(self):
         self.assertEqual(self.app(None).main_menu(), 0)
+
+    def test_hangup_and_terminate_exit_so_finally_blocks_run(self):
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        repair.exit_on_signals()
+        for sig, code in ((signal.SIGHUP, 129), (signal.SIGTERM, 143)):
+            with self.subTest(sig=sig), self.assertRaises(SystemExit) as cm:
+                signal.getsignal(sig)(sig, None)
+            self.assertEqual(cm.exception.code, code)
 
     def test_main_rejects_bad_usage_and_non_root(self):
         self.assertEqual(repair.main(["bogus"]), 2)

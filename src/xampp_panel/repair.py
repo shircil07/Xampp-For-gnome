@@ -5,8 +5,10 @@ Runs as root (sudo in a terminal the panel opens, or from setup.sh).
 """
 
 import os
+import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -14,14 +16,16 @@ import time
 from . import configedit, fsutil, health, pmaconfig, services, sites
 from .dialogs import Dialogs
 from .helper import SAFE_ENV, Helper, HelperFailure
-from .mysqladmin import (PMADB, MysqlAdmin, MysqlError, drop_anonymous_sql, password_problem,
+from .mysqladmin import (PMA_USER, PMADB, MysqlAdmin, MysqlError, drop_anonymous_sql, password_problem,
                          pma_account_sql, set_root_password_sql)
 from .paths import DEFAULT, Paths
 
 PMA_PASSWORD_BYTES = 24  # secrets.token_urlsafe(24): 32 characters from [A-Za-z0-9_-]
 MYSQL_START_SECONDS = 20
 USAGE = "usage: sudo xampp-repair [first-install]"
-_FAILURES = (MysqlError, HelperFailure, OSError, ValueError)
+_FAILURES = (MysqlError, HelperFailure, OSError, ValueError, subprocess.SubprocessError)
+# The control user's password gets reset, so it must not be able to name root or anything odd.
+_PMA_USER_NAME = re.compile(r"[A-Za-z0-9_]{1,32}")
 
 
 class RepairError(Exception):
@@ -174,7 +178,7 @@ class RepairApp:
         db = pmaconfig.get_value(text, "pmadb")
         if db not in (None, "", PMADB):
             raise RepairError(f"phpMyAdmin's pmadb is '{db}'; only '{PMADB}' is supported.")
-        user = pmaconfig.get_value(text, "controluser") or "pma"
+        user = self._pma_user(text)
         password = pmaconfig.get_value(text, "controlpass") or ""
         if fresh or not password:
             password = self.token(PMA_PASSWORD_BYTES)
@@ -185,6 +189,13 @@ class RepairApp:
         self._write(conf, text)
         if not self.admin.can_login(user, password, PMADB):
             raise RepairError(f"The account was set up, but '{user}' still cannot log in.")
+        return user
+
+    def _pma_user(self, text: str) -> str:
+        user = pmaconfig.get_value(text, "controluser") or PMA_USER
+        if not _PMA_USER_NAME.fullmatch(user) or user.lower() == "root":
+            raise RepairError(f"phpMyAdmin's controluser is '{user}'; it should be '{PMA_USER}'. "
+                              f"Change it in {self.paths.phpmyadmin_conf} and try again.")
         return user
 
     def fix_ftp(self) -> None:
@@ -269,6 +280,17 @@ class RepairApp:
         self._set_root_password(current, new)
 
 
+def _exit(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+def exit_on_signals() -> None:
+    """Closing the terminal (SIGHUP) or a kill (SIGTERM) exits through Python, so `finally`
+    blocks still delete the 0600 temp files that hold passwords."""
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(sig, _exit)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv not in ([], ["first-install"]):
@@ -281,6 +303,7 @@ def main(argv=None) -> int:
         print("whiptail is missing: sudo apt install whiptail", file=sys.stderr)
         return 1
     os.umask(0o022)
+    exit_on_signals()
     app = RepairApp(Dialogs(), MysqlAdmin(), Helper())
     try:
         return app.first_install() if argv else app.main_menu()

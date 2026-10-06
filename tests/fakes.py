@@ -96,7 +96,8 @@ class FakeHelper:
 
 
 class FakeRun:
-    """subprocess.run stand-in answering by program name: {"openssl": (0, "$6$...\\n", "")}."""
+    """subprocess.run stand-in answering by program name: {"openssl": (0, "$6$...\\n", "")}.
+    An exception as the answer is raised instead."""
 
     def __init__(self, answers=None):
         self.answers = answers or {}
@@ -104,5 +105,8 @@ class FakeRun:
 
     def __call__(self, argv, **kwargs):
         self.calls.append((list(map(str, argv)), kwargs))
-        code, out, err = self.answers.get(Path(str(argv[0])).name, (0, "", ""))
+        answer = self.answers.get(Path(str(argv[0])).name, (0, "", ""))
+        if isinstance(answer, BaseException):
+            raise answer
+        code, out, err = answer
         return subprocess.CompletedProcess(argv, code, out, err)

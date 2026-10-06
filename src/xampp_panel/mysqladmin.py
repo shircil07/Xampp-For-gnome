@@ -14,6 +14,7 @@ from .paths import DEFAULT, Paths
 MIN_PASSWORD = 8
 MAX_PASSWORD = 128
 PMADB = "phpmyadmin"  # the database phpMyAdmin's sql/create_tables.sql creates
+PMA_USER = "pma"  # phpMyAdmin's default control user
 TIMEOUT = 120  # seconds
 
 # Escaped backslashes only mean the same in every sql_mode once NO_BACKSLASH_ESCAPES is off.
