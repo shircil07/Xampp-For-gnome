@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from . import fsutil, privileged, services, sites  # noqa: E402
+from . import fsutil, privileged, services, sites, terminal  # noqa: E402
 from .paths import DEFAULT as PATHS  # noqa: E402
 from .services import State  # noqa: E402
 from .watch import StatusWatcher  # noqa: E402
@@ -224,12 +224,15 @@ class MainWindow(Adw.ApplicationWindow):
             tray_label += " (needs the AppIndicator extension)"
         menu.append(tray_label, "app.tray")
         menu.append("Lean mode (uses less memory)", "app.lean")
+        repair_action = Gio.SimpleAction.new("repair", None)
+        repair_action.connect("activate", lambda *_: self.open_repair())
+        self.add_action(repair_action)
+        menu.append("Repair & configure…", "win.repair")
         menu.append("Quit", "app.quit")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Menu"))
 
         self.banner, self.show_banner = _make_banner(
-            "MySQL root has no password. To set one, run “bash tools/secure-mysql.sh” "
-            "from the XAMPP Panel source folder.")
+            "MySQL root has no password. Use ☰ → Repair & configure to set one.")
         self.toasts = Adw.ToastOverlay(child=stack, vexpand=True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(header)
@@ -331,6 +334,16 @@ class MainWindow(Adw.ApplicationWindow):
     # -- actions ----------------------------------------------------------
     def toast(self, text: str) -> None:
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=5))
+
+    def open_repair(self) -> None:
+        argv = terminal.terminal_argv(terminal.repair_command(PATHS))
+        if argv is None:
+            self.toast(f"No terminal found. Run in a terminal: sudo {PATHS.repair}")
+            return
+        try:
+            Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE)
+        except GLib.Error as e:
+            self.toast(f"Could not open a terminal: {e.message}")
 
     def call_helper(self, args, busy=(), done=None, failed=None):
         """Run the root helper asynchronously; the UI never blocks."""
