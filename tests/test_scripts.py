@@ -30,6 +30,14 @@ class ScriptsTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("sudo", proc.stderr)
 
+    def test_setup_uses_xampp_repair_not_lampp_security(self):
+        text = (ROOT / "setup.sh").read_text()
+        self.assertNotIn('lampp" security', text)
+        self.assertIn('"$APP_DIR/bin/xampp-repair" first-install', text)
+        self.assertIn("whiptail", text)
+        self.assertIn('"$SRC_DIR/bin/xampp-repair"', text)
+        self.assertIn("/usr/local/bin/xampp-repair", text)
+
 
 class FixPmaSqlTest(unittest.TestCase):
     """tools/fix-pma.php needs a PHP CLI: set XAMPP_TEST_PHP or have php on PATH."""

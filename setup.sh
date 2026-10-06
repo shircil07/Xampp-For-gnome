@@ -54,7 +54,7 @@ REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 apt-cache show gir1.2-adw-1 >/dev/null 2>&1 || die "libadwaita is not available: XAMPP Panel needs Zorin OS 17 / Ubuntu 22.04 or newer."
 
 say "Installing required packages"
-packages=(libcrypt1 net-tools acl python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1)
+packages=(libcrypt1 net-tools acl whiptail python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1)
 if apt-cache show pkexec >/dev/null 2>&1; then packages+=(pkexec); else packages+=(policykit-1); fi
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${packages[@]}"
@@ -115,7 +115,7 @@ find "$APP_DIR/lib" -name __pycache__ -prune -exec rm -rf {} +
 chown -R root:root "$APP_DIR/lib"
 chmod -R u=rwX,go=rX "$APP_DIR/lib"
 python3 -I -m compileall -q "$APP_DIR/lib"
-install -o root -g root -m 0755 "$SRC_DIR/bin/xampp-panel" "$SRC_DIR/bin/xampp-helper" "$APP_DIR/bin/"
+install -o root -g root -m 0755 "$SRC_DIR/bin/xampp-panel" "$SRC_DIR/bin/xampp-helper" "$SRC_DIR/bin/xampp-repair" "$APP_DIR/bin/"
 
 installed=()
 put() { install -D -o root -g root -m 0644 "$SRC_DIR/$1" "$2"; installed+=("$2"); }
@@ -126,6 +126,8 @@ put "data/icons/xampp-panel-running.svg" /usr/share/icons/hicolor/scalable/statu
 put "data/icons/xampp-panel-stopped.svg" /usr/share/icons/hicolor/scalable/status/xampp-panel-stopped.svg
 ln -sfn "$APP_DIR/bin/xampp-panel" /usr/local/bin/xampp-panel
 installed+=(/usr/local/bin/xampp-panel)
+ln -sfn "$APP_DIR/bin/xampp-repair" /usr/local/bin/xampp-repair
+installed+=(/usr/local/bin/xampp-repair)
 printf '%s\n' "${installed[@]}" > "$APP_DIR/install-manifest.txt"
 gtk-update-icon-cache -qtf /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database -q /usr/share/applications 2>/dev/null || true
@@ -139,13 +141,12 @@ case "$LEAN" in
   ask) if ask "Turn on lean mode (fewer idle Apache processes and a smaller MySQL)?"; then "$HELPER" lean on; fi ;;
 esac
 
-if ask "Set passwords for MySQL root and phpMyAdmin now (recommended)?"; then
-  "$LAMPP/lampp" startmysql || echo "MySQL did not start; skipping password setup." >&2
-  "$LAMPP/lampp" security </dev/tty || echo "Password setup did not finish. You can run it again with: sudo $LAMPP/lampp security"
-  "$LAMPP/lampp" stopmysql || true
-fi
+say "Setting up MySQL and phpMyAdmin accounts"
+# Replaces XAMPP's "lampp security", which breaks MySQL networking, the FTP config and phpMyAdmin.
+"$APP_DIR/bin/xampp-repair" first-install </dev/tty >/dev/tty \
+  || echo "Account setup did not finish. Run it later with: sudo xampp-repair"
 
-# After "lampp security": it can add skip-networking, which harden replaces with bind-address.
+# Last, so nothing above can undo the localhost-only setting.
 if ((ALLOW_LAN)); then
   "$HELPER" harden off
   echo "LAN access allowed: other devices on your network can reach XAMPP."
