@@ -5,8 +5,9 @@ from pathlib import Path
 from unittest import mock
 
 import fakes
-from xampp_panel import health, pmaconfig, repair
+from xampp_panel import configedit, health, pmaconfig, repair
 from xampp_panel.paths import Paths
+from xampp_panel.services import State
 
 PMA_XAMPP = ("<?php\n$i = 0;\n$i++;\n$cfg['Servers'][$i]['auth_type'] = 'config';\n"
              "$cfg['Servers'][$i]['user'] = 'root';\n$cfg['Servers'][$i]['controluser'] = 'pma';\n"
@@ -33,10 +34,19 @@ class RepairCase(unittest.TestCase):
         self.run = fakes.FakeRun({"openssl": (0, HASH + "\n", "")})
         self.running = True
 
-    def app(self, *answers, token="generated-token"):
+    def app(self, *answers, token="generated-token", real_mysql_check=False):
+        """real_mysql_check: use RepairApp's own /proc-based check instead of self.running."""
         self.dialogs = fakes.FakeDialogs(answers)
+        running = None if real_mysql_check else (lambda: self.running)
         return repair.RepairApp(self.dialogs, self.admin, self.helper, self.paths, self.run,
-                                token=lambda n: token, mysql_running=lambda: self.running, sleep=lambda s: None)
+                                token=lambda n: token, mysql_running=running, sleep=lambda s: None)
+
+    def mysqld_without_port(self):
+        """A live XAMPP mysqld in the fake /proc, with no port listening (what skip-networking does)."""
+        d = self.paths.proc / "500"
+        d.mkdir(parents=True)
+        (d / "comm").write_text("mysqld\n")
+        (d / "cmdline").write_bytes(f"{self.paths.lampp}/sbin/mysqld\0--skip-networking\0".encode())
 
     def pma(self, key):
         return pmaconfig.get_value(self.paths.phpmyadmin_conf.read_text(), key)
@@ -72,6 +82,11 @@ class ChangeRootPasswordTest(RepairCase):
         app = self.app(None)
         self.assertFalse(app._attempt(app.change_root_password))
         self.assertEqual(self.admin.executed, [])
+
+    def test_mysqld_without_port_counts_as_running(self):
+        self.mysqld_without_port()
+        self.assertFalse(self.app(real_mysql_check=True)._ensure_mysql())
+        self.assertEqual(self.helper.calls, [])
 
     def test_starts_mysql_when_stopped(self):
         self.running = False
@@ -142,9 +157,18 @@ class FtpTest(RepairCase):
 class OtherActionsTest(RepairCase):
     def test_networking_fix_comments_out_skip_networking(self):
         self.paths.my_cnf.write_text("[mysqld]\nskip-networking\n")
-        self.app(True).fix_networking()
-        self.assertIn("#skip-networking", self.paths.my_cnf.read_text())
+        self.mysqld_without_port()
+        self.app(True, real_mysql_check=True).fix_networking()
+        text = self.paths.my_cnf.read_text()
+        self.assertFalse(configedit.mysql_networking_off(text))
+        self.assertFalse(configedit.mysql_hardened(text))  # localhost-only is harden's job, not this fix's
         self.assertEqual(self.helper.calls, [("lampp", ["stopmysql", "startmysql"])])
+
+    def test_networking_fix_when_mysql_stopped_says_start_it(self):
+        self.paths.my_cnf.write_text("[mysqld]\nskip-networking\n")
+        self.app(real_mysql_check=True).fix_networking()
+        self.assertEqual(self.helper.calls, [])
+        self.assertIn("Start MySQL", self.dialogs.messages()[0])
 
     def test_mysql_upgrade_shows_output(self):
         self.app().mysql_upgrade()
@@ -156,8 +180,8 @@ class OtherActionsTest(RepairCase):
 
     def test_health_check_shows_report(self):
         app = self.app()
-        app.check.snapshot = lambda paths: {"apache": repair.State.STOPPED, "mysql": repair.State.STOPPED,
-                                            "ftp": repair.State.STOPPED}
+        app.check.snapshot = lambda paths: {"apache": State.STOPPED, "mysql": State.STOPPED,
+                                            "ftp": State.STOPPED}
         app.health_check()
         self.assertRegex(self.dialogs.messages()[0], r"problem\(s\) found\.|No problems found\.")
 

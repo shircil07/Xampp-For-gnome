@@ -57,7 +57,7 @@ class HealthCheck:
         """root_password: None when not known yet; checks that need it are skipped."""
         states = self.snapshot(self.paths)
         findings = self._services(states) + self._configs()
-        if states["mysql"] is State.RUNNING:
+        if states["mysql"] in (State.RUNNING, State.STARTING):  # STARTING: no port, but the socket works
             findings += self._mysql(root_password)
         else:
             findings.append(Finding(True, "MySQL is not running: account checks skipped"))

@@ -79,6 +79,13 @@ class HealthCheckTest(HealthCase):
         self.admin.pma_login = False
         self.assertIn(health.FIX_PMA, [fix for _, fix in self.problems(self.check())])
 
+    def test_mysql_without_port_still_gets_account_checks(self):
+        self.states["mysql"] = State.STARTING  # process running, port not listening (skip-networking)
+        self.admin.root_password = ""
+        findings = self.check()
+        self.assertIn(health.FIX_ROOT, [fix for _, fix in self.problems(findings)])
+        self.assertFalse(any("not running" in f.text for f in findings))
+
     def test_mysql_stopped_skips_account_checks(self):
         self.states["mysql"] = State.STOPPED
         self.admin.root_password = ""

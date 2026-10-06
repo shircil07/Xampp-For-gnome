@@ -59,6 +59,12 @@ def mysql_networking_off(text: str) -> bool:
     return bool(_SKIP_NET.search(text))
 
 
+def mysql_networking_on(text: str) -> str:
+    """Comments out skip-networking and nothing else: no restore marker, bind-address untouched,
+    so turning harden off later does not switch networking off again."""
+    return _SKIP_NET.sub(lambda m: f"#{m[1]}", text)
+
+
 def mysql_hardened(text: str) -> bool:
     return _BIND in text
 

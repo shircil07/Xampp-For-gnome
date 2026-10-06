@@ -101,6 +101,21 @@ class MysqlNetworkingTest(unittest.TestCase):
         fixed = configedit.mysql_localhost("[mysqld]\nskip-networking\n", True)
         self.assertFalse(configedit.mysql_networking_off(fixed))
 
+    def test_networking_on_only_removes_skip_networking(self):
+        text = "[mysqld]\nport=3306\nskip-networking\n"
+        on = configedit.mysql_networking_on(text)
+        self.assertFalse(configedit.mysql_networking_off(on))
+        self.assertFalse(configedit.mysql_hardened(on))  # bind-address is harden's business
+        self.assertEqual(configedit.mysql_localhost(on, False), on)  # harden off does not bring it back
+        self.assertEqual(configedit.mysql_networking_on(on), on)
+
+    def test_networking_on_keeps_bind_address(self):
+        hardened = configedit.mysql_localhost("[mysqld]\nport=3306\n", True) + "skip_networking\n"
+        on = configedit.mysql_networking_on(hardened)
+        self.assertFalse(configedit.mysql_networking_off(on))
+        self.assertTrue(configedit.mysql_hardened(on))
+        self.assertFalse(configedit.mysql_networking_off(configedit.mysql_localhost(on, False)))
+
     def test_hardened(self):
         self.assertFalse(configedit.mysql_hardened("[mysqld]\nport=3306\n"))
         self.assertTrue(configedit.mysql_hardened(configedit.mysql_localhost("[mysqld]\nport=3306\n", True)))

@@ -17,7 +17,6 @@ from .helper import SAFE_ENV, Helper, HelperFailure
 from .mysqladmin import (PMADB, MysqlAdmin, MysqlError, drop_anonymous_sql, password_problem,
                          pma_account_sql, set_root_password_sql)
 from .paths import DEFAULT, Paths
-from .services import State
 
 PMA_PASSWORD_BYTES = 24  # secrets.token_urlsafe(24): 32 characters from [A-Za-z0-9_-]
 MYSQL_START_SECONDS = 20
@@ -42,7 +41,9 @@ class RepairApp:
         self.paths = paths
         self.run = run
         self.token = token
-        self.mysql_running = mysql_running or (lambda: services.snapshot(paths)["mysql"] is State.RUNNING)
+        # A running mysqld counts even when its port is not listening (skip-networking):
+        # the client still reaches it through the socket.
+        self.mysql_running = mysql_running or (lambda: "mysql" in services.running_services(paths))
         self.sleep = sleep
         self.check = health.HealthCheck(admin, paths, run)
         self.root_password: str | None = None  # None = not known yet, "" = root has no password
@@ -210,7 +211,7 @@ class RepairApp:
         if not configedit.mysql_networking_off(text):
             self.dialogs.msgbox("MySQL networking is already on.")
             return
-        self._write(conf, configedit.mysql_localhost(text, True))
+        self._write(conf, configedit.mysql_networking_on(text))
         if self.mysql_running() and self.dialogs.yesno("Done. Restart MySQL now to apply it?"):
             self.helper.lampp(["stopmysql", "startmysql"])
         elif not self.mysql_running():
