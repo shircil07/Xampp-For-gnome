@@ -24,8 +24,9 @@ What the earlier session found broken, and how it's fixed now:
 1. **MySQL had TCP switched off** (log: `port: 0`). XAMPP's `lampp security` offers to "turn off
    network access" and adds `skip-networking` to `my.cnf`.
    **Fixed in code:** `harden on` comments out an active `skip-networking` (reversible, see §4);
-   `xampp-repair` → "Turn MySQL networking back on" does the same from the menu, and the health
-   check flags it. `setup.sh` no longer calls `lampp security` at all (see below).
+   `xampp-repair` → "Turn MySQL networking back on" only comments it out
+   (`configedit.mysql_networking_on`: no restore marker, `bind-address` untouched, so a later
+   `harden off` does not switch networking off again), and the health check flags it. `setup.sh` no longer calls `lampp security` at all (see below).
 2. **ProFTPD wouldn't start** (`unknown configuration directive 'function' on line 44`). `lampp
    security` sets the FTP password by running a PHP snippet; with short tags off, PHP printed the
    snippet's source and it was pasted into `proftpd.conf` as the `UserPassword daemon` value.
@@ -45,11 +46,15 @@ What the earlier session found broken, and how it's fixed now:
    root password" does the same whenever it runs. The panel's banner now points at the menu
    instead of `lampp security`.
 
-`setup.sh` no longer runs `lampp security`: it runs `xampp-repair first-install` instead (always
-drops anonymous accounts and sets up the `pma` control user; asks for a root password, skippable).
+`setup.sh` no longer runs `lampp security`: it runs `xampp-repair first-install` instead. On a
+fresh XAMPP it sets up the `pma` control user, asks for a root password (empty = skip) and drops
+anonymous accounts. Re-running `setup.sh` keeps what works: a `pma` that is configured and can log
+in is left alone (otherwise it is set up fresh), and if root already has a password the root step is
+skipped with a note pointing at "Change MySQL root password" (it never asks for the current root
+password; anonymous accounts are then not touched either). Notes are printed after the last dialog.
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-159 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+177 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -356,7 +361,12 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `499ca04` | Security fix: "Show phpMyAdmin pma password" uses a 0600 tempfile + `--textbox`, not a `--msgbox` argument (passwords must never be on a process's argv) |
 | `6721c49` | `setup.sh` runs `xampp-repair first-install` instead of `lampp security` |
 | `8770da2` | Panel ☰ "Repair & configure…" opens a terminal running `sudo xampp-repair` (`terminal.py`) |
-| this task | `tools/` deleted; its tests removed; README/MAINTAINER/USER-GUIDE/spec updated to match |
+| `1a7ba0b` | `tools/` deleted; its tests removed; README/MAINTAINER/USER-GUIDE/spec updated to match |
+| `5f2b3e4` | Review fix: a running `mysqld` without its port (skip-networking) counts as running in `xampp-repair` and the health check; "Turn MySQL networking back on" uses `mysql_networking_on`, not `harden` |
+| `bbc0c53` | Review fix: refuse a `root`/odd phpMyAdmin `controluser`; SIGHUP/SIGTERM exit through `finally` (temp files removed); subprocess timeouts reported |
+| `311d44d` | Review fix: re-running `first-install` keeps a working `pma` and an existing root password; Cancel on "Repeat it" cancels; "Starting MySQL" notice |
+| `d1cd3b5` | Review fix: public `Helper.apply_sites`; tighter tests |
+| this task | Docs updated to the review fixes |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -368,6 +378,9 @@ Decisions made during the build (and what they cost if wrong):
 - **Wrong-typed settings values:** they're ignored and the default is used.
 - **Uninstall:** it continues past a failed revert step, but then **keeps** the `.bak` files and lists them.
 - **"Start" button:** it starts Apache + MySQL only. FTP must be switched on explicitly.
+- **"MySQL is running" in `xampp-repair`:** a live XAMPP `mysqld` process, port or not
+  (`services.running_services`). With `skip-networking` port 3306 never listens, but the `mysql`
+  client still connects through the socket, so starting MySQL again would only fail.
 - **`skip-networking` vs `bind-address`:** "localhost only" uses `bind-address=127.0.0.1` and removes
   `skip-networking`. Both keep MySQL off the network, but `skip-networking` also breaks `127.0.0.1`
   clients and the panel's port-based status check.
@@ -415,9 +428,9 @@ accounts and phpMyAdmin's login, each naming the menu item that fixes it.
 | "port used by another program" | Another server (Ubuntu's `apache2`, `nginx`, `mysql`), **or** a detection problem | `sudo ss -ltnp 'sport = :80'`. If it names `/opt/lampp/...`, it's XAMPP (see §7) |
 | phpMyAdmin: `mysqli::real_connect(): (HY000/2002): No such file or directory` | MySQL isn't running (its socket file is missing) | Start MySQL; if it won't start, see the MySQL log |
 | phpMyAdmin: `Access denied for user 'pma'@'localhost'` / "Connection for controluser … failed" | `lampp security` (or a broken config) set `controlpass` in `config.inc.php` but not on the MySQL `pma` account | `sudo xampp-repair` → **"Fix phpMyAdmin pma login"**. Creates the `phpmyadmin` storage tables if missing, creates/updates `pma` with the config's password (never on a command line) and grants it `SELECT, INSERT, UPDATE, DELETE` on that database only; confirms the login works before reporting success. Safe to re-run |
-| phpMyAdmin: `#1044 - Access denied for user ''@'localhost' to database …` | Logged in as MariaDB's anonymous account: a user name other than `root` with no password matches `''@'localhost'` (needs root without a password, the anonymous account, and `AllowNoPassword`) | Right now: log out of phpMyAdmin and log in as `root`. For good: `sudo xampp-repair` → **"Change MySQL root password"**. Asks for the current root password (Enter if none), then the new one twice (8–128 characters). MariaDB itself lists the accounts (`EXECUTE IMMEDIATE` over `mysql.user`), so every `''@<host>` is dropped and every `root@<host>` gets the password, in one `mysql` session. If phpMyAdmin's `auth_type` is `config` (auto-login as root), it is switched to `cookie` **after** the password change succeeded, with a one-time backup `config.inc.php.xampp-panel.bak`. If a statement fails, `mysql` stops there: at worst the anonymous accounts are gone and root is unchanged. Then log in to phpMyAdmin as `root` with the new password |
+| phpMyAdmin: `#1044 - Access denied for user ''@'localhost' to database …` | Logged in as MariaDB's anonymous account: a user name other than `root` with no password matches `''@'localhost'` (needs root without a password, the anonymous account, and `AllowNoPassword`) | Right now: log out of phpMyAdmin and log in as `root`. For good: `sudo xampp-repair` → **"Change MySQL root password"**. Asks for the current root password only if root has one, then the new one twice (8–128 characters). MariaDB itself lists the accounts (`EXECUTE IMMEDIATE` over `mysql.user`), so every `''@<host>` is dropped and every `root@<host>` gets the password, in one `mysql` session. If phpMyAdmin's `auth_type` is `config` (auto-login as root), it is switched to `cookie` **after** the password change succeeded, with a one-time backup `config.inc.php.xampp-panel.bak`. If a statement fails, `mysql` stops there: at worst the anonymous accounts are gone and root is unchanged. Then log in to phpMyAdmin as `root` with the new password |
 | MySQL won't start | See its log | `sudo tail -n 40 /opt/lampp/var/mysql/$(hostname).err` |
-| MySQL stuck on "starting…"; log says `port: 0` | `skip-networking` active in `my.cnf` | `sudo xampp-repair` → **"Turn MySQL networking back on"** (equivalent to `xampp-helper harden on` plus a MySQL restart offer). Manual fallback: `sudo grep -n networking /opt/lampp/etc/my.cnf`; then `sudo /opt/xampp-panel/bin/xampp-helper harden on` and `sudo /opt/lampp/lampp stopmysql && sudo /opt/lampp/lampp startmysql` |
+| MySQL stuck on "starting…"; log says `port: 0` | `skip-networking` active in `my.cnf` | `sudo xampp-repair` → **"Turn MySQL networking back on"** (comments out `skip-networking`, leaves `bind-address` to `harden`, offers a MySQL restart). Manual fallback: `sudo grep -n networking /opt/lampp/etc/my.cnf`; then `sudo /opt/xampp-panel/bin/xampp-helper harden on` and `sudo /opt/lampp/lampp stopmysql && sudo /opt/lampp/lampp startmysql` |
 | FTP won't start: `unknown configuration directive 'function'` | `lampp security` wrote PHP source into `proftpd.conf` | `sudo xampp-repair` → **"Fix FTP config"**. Detects the broken block, asks for a new FTP password for the `daemon` user, hashes it with `openssl passwd -6 -stdin` (never on argv), writes it back (one-time backup) and validates with `proftpd -t`, restoring the old config if that fails |
 | Apache won't start | Config error | `sudo /opt/lampp/bin/apachectl -t`; `sudo tail -n 40 /opt/lampp/logs/error_log` |
 | `http://name.local` "site can't be reached" | Site not created, or name not resolving | `grep -A5 "BEGIN xampp-panel sites" /etc/hosts`; `cat /opt/xampp-panel/state/sites.json`; `getent hosts name.local` |
@@ -510,7 +523,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 159 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 177 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 

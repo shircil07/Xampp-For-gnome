@@ -28,7 +28,12 @@ It asks before doing anything you might not want:
 
 - **Stop another web server?** Only asked if something else, like Ubuntu's own Apache, is using XAMPP's ports.
 - **Lean mode?** Uses less memory. Fine for one person developing.
-- **Set passwords?** Recommended. Sets passwords for the MySQL admin user and phpMyAdmin.
+- **MySQL root password** (a password box near the end): the password for the MySQL admin user `root`.
+  Recommended. Leave it empty to skip; the panel then reminds you with a yellow bar. Not asked again
+  when you re-run `setup.sh` and root already has a password (change it from the repair menu instead).
+
+phpMyAdmin's internal account (`pma`) is always set up for you, without a question. Re-running
+`setup.sh` leaves it alone if it already works.
 
 Options (`./setup.sh --help`):
 
@@ -132,10 +137,12 @@ MySQL/phpMyAdmin passwords and to fix the known ways XAMPP's own `lampp security
 | Turn MySQL networking back on | Repairs MySQL staying on "starting…" with its log saying `port: 0`. |
 | Run mysql_upgrade | Fixes MariaDB warnings like `Please run mysql_upgrade` after an update. |
 | Re-apply panel config | Puts back the panel's site list, localhost-only settings and lean mode, in case an XAMPP reinstall removed them. |
-| Quit | Closes the menu and the terminal. |
+| Quit | Closes the menu. If you opened it from the panel, the terminal then shows "Press Enter to close"; press Enter. |
 
-It's safe to open the menu and look around — nothing changes until you choose an item that makes a
-change, and most ask you to confirm first.
+It's safe to open the menu and look around: Health check and Show phpMyAdmin pma password only read.
+The other items change something as soon as you choose them, but those that need a new password ask
+for it first, and Esc or Cancel at any question stops without changing anything. Items that need
+MySQL start it if it isn't running (the terminal says so) and leave it running.
 
 ---
 

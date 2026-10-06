@@ -94,11 +94,11 @@ Refuses to run unless root. The root password, once entered, is kept in memory f
 | Item | What it does |
 |---|---|
 | Health check | Read-only report in a textbox: services and ports, `apachectl -t`, `proftpd -t`, `skip-networking` active, `proftpd.conf` corrupted by `lampp security`, root has a password, anonymous accounts, `pma` login, `sites.json` vs `/etc/hosts`. Each problem names the menu item that fixes it. |
-| Change MySQL root password | Current password (Enter if none) → new twice → set on every root account, drop anonymous accounts; if phpMyAdmin `auth_type` is `config`, back up and switch to `cookie` after success. |
+| Change MySQL root password | Current password (asked only if root has one) → new twice → set on every root account, drop anonymous accounts; if phpMyAdmin `auth_type` is `config`, back up and switch to `cookie` after success. |
 | Show phpMyAdmin pma password | Shows `controluser` / `controlpass` from the config after a yes/no warning. |
 | Fix phpMyAdmin pma login | Sets `controluser = 'pma'` and `pmadb = 'phpmyadmin'` if missing, generates a `controlpass` if empty, writes them (backup once), creates/updates `pma` and runs `create_tables.sql`; confirms the login works. |
 | Fix FTP config | If `proftpd.conf` contains the broken `UserPassword daemon <?…?>` block: asks for a new FTP password, hashes it with `openssl passwd -6 -stdin`, replaces the block (backup once), validates with `proftpd -t`, rolls back on failure. |
-| Turn MySQL networking back on | `helper.harden(True)` (comments out `skip-networking`), offers to restart MySQL. |
+| Turn MySQL networking back on | Comments out `skip-networking` only (`configedit.mysql_networking_on`; not `harden`, so `bind-address` is left alone and `harden off` cannot bring `skip-networking` back), offers to restart MySQL. |
 | Run mysql_upgrade | With the root password via the defaults file. |
 | Re-apply panel config | `integrate on`; `harden on` only if `my.cnf` still has the panel's `bind-address` marker (otherwise LAN mode was chosen and is left alone); `lean on` only if `httpd.conf` has the `lean` block. |
 | Quit | |
@@ -106,15 +106,20 @@ Refuses to run unless root. The root password, once entered, is kept in memory f
 **Deviation (recorded):** "Re-apply panel config" asks two yes/no questions (localhost only,
 lean mode) instead of detecting markers, because a XAMPP upgrade removes them too.
 
-MySQL-dependent items start MySQL first if it isn't running (and say so).
+MySQL-dependent items start MySQL first if it isn't running (and say so: a "Starting MySQL" line
+on the terminal, no extra keypress). "Running" means a live XAMPP `mysqld` process, even when its
+port is not listening (`skip-networking`).
 
 ### First-install flow (`xampp-repair first-install`, replaces `lampp security` in `setup.sh`)
 
 1. Start MySQL (`lampp startmysql`).
-2. `pma`: same as the menu's "Fix phpMyAdmin pma login", but always generates a fresh
-   `controlpass` (`secrets.token_urlsafe(24)`).
-3. Ask for a root password (passwordbox; empty/Cancel = skip, with a note about the banner).
-4. Drop anonymous accounts always; set the root password if given; switch phpMyAdmin
+2. `pma`: if `controluser`, `controlpass` and `pmadb = 'phpmyadmin'` are set and the control
+   user can log in, leave it alone ("already working"). Otherwise same as the menu's "Fix
+   phpMyAdmin pma login", but always with a fresh `controlpass` (`secrets.token_urlsafe(24)`).
+3. If root already has a password: skip steps 3–4 with a note pointing at "Change MySQL root
+   password" (never ask for the current password here). Otherwise ask for a root password
+   (passwordbox; empty/Cancel = skip, with a note about the banner).
+4. Drop anonymous accounts; set the root password if given; switch phpMyAdmin
    `auth_type` `config` → `cookie` only if a password was set.
 5. Stop MySQL. Any failure prints the error and the menu item that retries it; setup continues.
 
@@ -164,3 +169,5 @@ handover), `docs/USER-GUIDE.md` (Repair & configure section). `tools/` reference
 
 `tools/` is deleted. On the user's machine nothing else changes; re-running `setup.sh` installs
 `xampp-repair`. The user's pending "secure root" step is done with the new menu item.
+Re-running `setup.sh` runs `first-install` again, which keeps what works (step 2 and 3 above): a
+working `pma` keeps its password and an existing root password is neither asked for nor changed.
