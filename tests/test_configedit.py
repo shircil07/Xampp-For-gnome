@@ -61,6 +61,51 @@ class MysqlLocalhostTest(unittest.TestCase):
         self.assertEqual(configedit.mysql_localhost(on, False), text)
 
 
+HASH = "$6$abcdefgh12345678$" + "A" * 86
+BROKEN_FTP = """ServerName "ProFTPD"
+UserPassword daemon <?
+function ftp_password() {
+  return crypt("x");
+}
+?>
+DefaultRoot ~
+"""
+
+
+class ProftpdPasswordTest(unittest.TestCase):
+    def test_detects_php_written_by_lampp_security(self):
+        self.assertTrue(configedit.proftpd_password_broken(BROKEN_FTP))
+        self.assertFalse(configedit.proftpd_password_broken(f"UserPassword daemon {HASH}\n"))
+
+    def test_replaces_broken_block(self):
+        new = configedit.proftpd_set_password(BROKEN_FTP, HASH)
+        self.assertEqual(new, f'ServerName "ProFTPD"\nUserPassword daemon {HASH}\nDefaultRoot ~\n')
+
+    def test_replaces_existing_password_line(self):
+        self.assertEqual(configedit.proftpd_set_password("A\nUserPassword daemon old\nB\n", HASH),
+                         f"A\nUserPassword daemon {HASH}\nB\n")
+
+    def test_appends_when_missing(self):
+        self.assertEqual(configedit.proftpd_set_password("A", HASH), f"A\nUserPassword daemon {HASH}\n")
+
+    def test_rejects_anything_but_a_sha512_hash(self):
+        for bad in ("plain", "$1$abc$def", HASH + "\nUser root"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                configedit.proftpd_set_password(BROKEN_FTP, bad)
+
+
+class MysqlNetworkingTest(unittest.TestCase):
+    def test_networking_off(self):
+        self.assertTrue(configedit.mysql_networking_off("[mysqld]\nskip-networking\n"))
+        self.assertFalse(configedit.mysql_networking_off("[mysqld]\n#skip-networking\n"))
+        fixed = configedit.mysql_localhost("[mysqld]\nskip-networking\n", True)
+        self.assertFalse(configedit.mysql_networking_off(fixed))
+
+    def test_hardened(self):
+        self.assertFalse(configedit.mysql_hardened("[mysqld]\nport=3306\n"))
+        self.assertTrue(configedit.mysql_hardened(configedit.mysql_localhost("[mysqld]\nport=3306\n", True)))
+
+
 class RenderTest(unittest.TestCase):
     def test_vhosts_start_with_localhost_default(self):
         out = configedit.render_vhosts([Site("blog", "/home/u/Sites/blog", 1000)], Path("/opt/lampp/htdocs"))

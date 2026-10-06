@@ -55,6 +55,38 @@ def mysql_localhost(text: str, on: bool) -> str:
     return f"{text}[mysqld]\n{_BIND}"
 
 
+def mysql_networking_off(text: str) -> bool:
+    return bool(_SKIP_NET.search(text))
+
+
+def mysql_hardened(text: str) -> bool:
+    return _BIND in text
+
+
+# "lampp security" pastes the PHP meant to compute the FTP password hash into proftpd.conf.
+_PROFTPD_BROKEN = re.compile(r"(?ms)^UserPassword[ \t]+daemon[ \t]+<\?.*?^\?>[ \t]*$\n?")
+_PROFTPD_PASSWORD = re.compile(r"(?m)^UserPassword[ \t]+daemon[ \t]+.*$\n?")
+_SHA512_CRYPT = re.compile(r"\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}")
+
+
+def proftpd_password_broken(text: str) -> bool:
+    return bool(_PROFTPD_BROKEN.search(text))
+
+
+def proftpd_set_password(text: str, hashed: str) -> str:
+    """Set the FTP user daemon's password hash, replacing a broken block or an old line."""
+    if not _SHA512_CRYPT.fullmatch(hashed):
+        raise ValueError("not a SHA-512 crypt hash")
+    line = f"UserPassword daemon {hashed}\n"
+    for pattern in (_PROFTPD_BROKEN, _PROFTPD_PASSWORD):
+        new, count = pattern.subn(lambda m: line, text, count=1)
+        if count:
+            return new
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + line
+
+
 PROFTPD_LOCAL = "DefaultAddress 127.0.0.1\nSocketBindTight on"
 
 LEAN_HTTPD = """\
