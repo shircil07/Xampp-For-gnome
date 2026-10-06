@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from xampp_panel import fsutil
 
@@ -68,3 +69,23 @@ class TailTest(FsutilCase):
         self.assertTrue(out.endswith("line 999\n"))
         self.assertTrue(out.startswith("line "))
         self.assertLessEqual(len(out), 100)
+
+
+class AtomicWriteOwnerTest(unittest.TestCase):
+    def test_keeps_owner_and_group_of_existing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.inc.php"
+            path.write_text("old")
+            st = path.stat()
+            calls = []
+            real_fchown = os.fchown
+            with mock.patch("os.fchown", side_effect=lambda fd, uid, gid: calls.append((uid, gid)) or real_fchown(fd, uid, gid)):
+                fsutil.atomic_write(path, "new")
+            self.assertEqual(calls, [(st.st_uid, st.st_gid)])
+            self.assertEqual(path.read_text(), "new")
+
+    def test_new_file_is_not_chowned(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("os.fchown") as fchown:
+                fsutil.atomic_write(Path(d) / "new.conf", "x")
+            fchown.assert_not_called()

@@ -16,3 +16,13 @@ class PathsTest(unittest.TestCase):
         p = Paths(lampp=Path("/tmp/l"), app=Path("/tmp/a"))
         self.assertEqual(p.httpd_conf, Path("/tmp/l/etc/httpd.conf"))
         self.assertEqual(p.launcher, Path("/tmp/a/bin/xampp-panel"))
+
+
+class RepairPathsTest(unittest.TestCase):
+    def test_repair_paths(self):
+        p = Paths(lampp=Path("/l"), app=Path("/a"))
+        self.assertEqual(p.phpmyadmin_conf, Path("/l/phpmyadmin/config.inc.php"))
+        self.assertEqual(p.pma_tables_sql, Path("/l/phpmyadmin/sql/create_tables.sql"))
+        self.assertEqual(p.mysql_upgrade, Path("/l/bin/mysql_upgrade"))
+        self.assertEqual(p.proftpd_bin, Path("/l/sbin/proftpd"))
+        self.assertEqual(p.repair, Path("/a/bin/xampp-repair"))

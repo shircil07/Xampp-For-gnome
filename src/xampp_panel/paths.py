@@ -56,12 +56,32 @@ class Paths:
         return self.lampp / "bin/mysql"
 
     @property
+    def mysql_upgrade(self) -> Path:
+        return self.lampp / "bin/mysql_upgrade"
+
+    @property
+    def proftpd_bin(self) -> Path:
+        return self.lampp / "sbin/proftpd"
+
+    @property
+    def phpmyadmin_conf(self) -> Path:
+        return self.lampp / "phpmyadmin/config.inc.php"
+
+    @property
+    def pma_tables_sql(self) -> Path:
+        return self.lampp / "phpmyadmin/sql/create_tables.sql"
+
+    @property
     def helper(self) -> Path:
         return self.app / "bin/xampp-helper"
 
     @property
     def launcher(self) -> Path:
         return self.app / "bin/xampp-panel"
+
+    @property
+    def repair(self) -> Path:
+        return self.app / "bin/xampp-repair"
 
     @property
     def state_file(self) -> Path:

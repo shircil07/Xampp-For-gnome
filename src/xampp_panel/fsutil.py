@@ -9,17 +9,26 @@ from pathlib import Path
 def atomic_write(path, text: str, mode: int | None = None) -> None:
     """Replace `path` with `text` atomically (temp file + rename in the same dir).
 
-    Keeps the existing file's permission bits unless `mode` is given.
+    Keeps the existing file's owner and permission bits unless `mode` is given.
     """
     path = Path(path)
-    if mode is None:
-        try:
-            mode = path.stat().st_mode & 0o7777
-        except FileNotFoundError:
+    owner = None
+    try:
+        st = path.stat()
+        owner = (st.st_uid, st.st_gid)
+        if mode is None:
+            mode = st.st_mode & 0o7777
+    except FileNotFoundError:
+        if mode is None:
             mode = 0o644
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            if owner is not None:
+                try:
+                    os.fchown(fh.fileno(), *owner)  # root rewriting a daemon-owned file must not take it over
+                except OSError:
+                    pass  # Silently ignore if not root; the file is still written correctly
             os.fchmod(fh.fileno(), mode)
             fh.write(text)
             fh.flush()
