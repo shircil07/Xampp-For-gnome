@@ -71,14 +71,20 @@ It then remembers it for a few minutes.
 - **Open htdocs folder:** `/opt/lampp/htdocs`, the classic XAMPP web folder (needs admin rights to edit).
 - **Open Sites folder:** `~/Sites`, where your own projects live (you can edit freely).
 
-A yellow bar at the top means **MySQL has no password**. Fix it with:
+A yellow bar at the top means **MySQL has no password**. Fix it from the XAMPP Panel source folder
+(the folder you ran `setup.sh` from):
 
 ```bash
-sudo /opt/lampp/lampp security
+bash tools/secure-mysql.sh
 ```
 
-Answer **no** when it offers to turn off MySQL network access (MySQL already only accepts this computer)
-and **no** to the FTP password question. Both options are broken in XAMPP 8.2 and stop MySQL or FTP working.
+It asks, in this order, for: your computer (sudo) password, a new root password twice, the current root
+password (just press Enter if there is none), and the new password once more to show the remaining
+accounts. It also removes MySQL's anonymous accounts. If phpMyAdmin used to open without asking for a
+password, it now shows a login page. Log in there as `root` with the new password.
+
+Don't use XAMPP's own `sudo /opt/lampp/lampp security` for this: its MySQL network and FTP options are
+broken in XAMPP 8.2 and stop MySQL or FTP working.
 
 ### Sites tab: your own projects
 
@@ -151,6 +157,8 @@ Before `--remove-xampp`, export any databases you want to keep: phpMyAdmin → E
 | "Not authorized, or the XAMPP Panel helper is missing" | Wrong password, or the install is broken. Re-run `sudo ./setup.sh`. |
 | 🔴 "port used by another program" | Something else uses that port. Run `sudo ss -ltnp 'sport = :80'` (or `:3306`) to see what. |
 | phpMyAdmin says `(HY000/2002): No such file or directory` | MySQL isn't running. Switch it on. |
+| phpMyAdmin says `Access denied for user 'pma'@'localhost'` or "Connection for controluser … failed" | `lampp security` left phpMyAdmin's helper account with the wrong password. From the project folder run `bash tools/fix-pma.sh`. It asks for your computer (sudo) password, then your MySQL root password, and should print `OK`. |
+| phpMyAdmin says `#1044 - Access denied for user ''@'localhost'` when creating a database | You're logged in under the wrong user name. Log out of phpMyAdmin and log in as `root`. To stop it happening, run `bash tools/secure-mysql.sh` (see the yellow bar above). |
 | MySQL log mentions `Please run mysql_upgrade` or `mysql.column_stats` | Run `sudo /opt/lampp/bin/mysql_upgrade -u root` (add `-p` if you set a password), then restart MySQL. |
 | MySQL stays yellow ("starting…") and its log says `port: 0` | Run `sudo /opt/xampp-panel/bin/xampp-helper harden on`, then switch MySQL off and on. |
 | FTP won't start; its error mentions `'function'` | `lampp security` damaged the FTP config. See "Troubleshooting" in [MAINTAINER.md](MAINTAINER.md) §11. |
