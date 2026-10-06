@@ -91,7 +91,7 @@ class FakeHelper:
     def lean(self, on):
         self.calls.append(("lean", on))
 
-    def _apply(self, sites):
+    def apply_sites(self, sites):
         self.calls.append(("apply", list(sites)))
 
 

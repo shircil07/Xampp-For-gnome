@@ -20,6 +20,11 @@ class SqlTest(unittest.TestCase):
         self.assertIsNone(mysqladmin.password_problem("  pass word  "))
         self.assertIsNotNone(mysqladmin.password_problem("short"))
         self.assertIsNotNone(mysqladmin.password_problem("x" * 129))
+
+    def test_password_length_boundaries(self):
+        for length, ok in ((7, False), (8, True), (128, True), (129, False)):
+            with self.subTest(length=length):
+                self.assertEqual(mysqladmin.password_problem("x" * length) is None, ok)
         self.assertIsNotNone(mysqladmin.password_problem("tab\there1"))
         self.assertIsNotNone(mysqladmin.password_problem("del\x7fhere1"))
 

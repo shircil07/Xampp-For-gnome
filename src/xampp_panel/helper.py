@@ -244,6 +244,11 @@ class Helper:
         self._apply(remaining)
         self._revoke(site, remaining)
 
+    def apply_sites(self, new_sites) -> None:
+        """Rewrite the vhosts, /etc/hosts block and state file for `new_sites` (xampp-repair's
+        "Re-apply panel config"); same checks and rollback as adding or removing a site."""
+        self._apply(new_sites)
+
     # -- site internals ---------------------------------------------------
     def _apply(self, new_sites) -> None:
         """Write vhosts (config-tested, rolled back on failure), hosts and state; reload Apache."""

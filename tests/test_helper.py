@@ -147,6 +147,13 @@ class SitesTest(HelperCase):
             self.assertEqual(kw["user"], self.uid)   # ACLs are set as the user, never as root
         self.assertEqual(self.out.getvalue().strip(), "http://blog.local/")
 
+    def test_apply_sites_rewrites_vhosts_hosts_and_state(self):
+        site = sites.Site("blog", str(self.site_dir), self.uid)
+        self.helper().apply_sites([site])
+        self.assertIn("ServerName blog.local", self.paths.vhosts_conf.read_text())
+        self.assertIn("127.0.0.1\tblog.local", self.paths.hosts.read_text())
+        self.assertEqual(sites.load(self.paths.state_file), [site])
+
     def test_site_add_validation(self):
         outside = self.root / "elsewhere"
         outside.mkdir()

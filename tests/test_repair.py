@@ -1,6 +1,5 @@
 import contextlib
 import io
-import os
 import signal
 import subprocess
 import tempfile
@@ -219,7 +218,12 @@ class OtherActionsTest(RepairCase):
         app.check.snapshot = lambda paths: {"apache": State.STOPPED, "mysql": State.STOPPED,
                                             "ftp": State.STOPPED}
         app.health_check()
-        self.assertRegex(self.dialogs.messages()[0], r"problem\(s\) found\.|No problems found\.")
+        report = self.dialogs.messages()[0]
+        # Fixture: damaged proftpd.conf and no vhosts block in httpd.conf; MySQL stopped (checks skipped).
+        self.assertIn("FIX  FTP config was damaged by 'lampp security'", report)
+        self.assertIn("FIX  The panel's sites setup is missing from httpd.conf", report)
+        self.assertIn("MySQL is not running: account checks skipped", report)
+        self.assertTrue(report.endswith("2 problem(s) found."), report)
 
 
 class FirstInstallTest(RepairCase):

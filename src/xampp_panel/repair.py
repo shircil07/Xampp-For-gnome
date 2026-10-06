@@ -249,7 +249,7 @@ class RepairApp:
         self.helper.integrate(True)
         self.helper.harden(local_only)
         self.helper.lean(lean)
-        self.helper._apply(sites.load(self.paths.state_file))
+        self.helper.apply_sites(sites.load(self.paths.state_file))
         self.dialogs.msgbox("Done. Restart Apache and MySQL from the panel to apply.")
 
     # -- first install ----------------------------------------------------
