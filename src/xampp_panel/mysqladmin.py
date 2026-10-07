@@ -72,6 +72,15 @@ def set_root_password_sql(password: str) -> str:
             + "SET @pw = NULL, @accounts = NULL;\n")
 
 
+def reset_root_sql(password: str) -> str:
+    """For MariaDB's init-file, run once at startup with the grant tables on (unlike
+    --skip-grant-tables, MySQL is never open without a password). One statement per line.
+    Only root@localhost: the caller then sets the other root accounts with set_root_password_sql."""
+    if "\n" in password or "\r" in password:
+        raise ValueError("line breaks are not allowed in the password")
+    return _SQL_MODE + f"ALTER USER 'root'@'localhost' IDENTIFIED BY {sql_quote(password)};\n"
+
+
 def pma_account_sql(user: str, password: str) -> str:
     """Creates or updates phpMyAdmin's control user, with access to its own database only."""
     account = f"{sql_quote(user)}@'localhost'"

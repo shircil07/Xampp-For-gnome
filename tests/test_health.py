@@ -52,6 +52,12 @@ class HealthCheckTest(HealthCase):
         self.states["mysql"] = State.STARTING
         self.assertIn(health.FIX_NETWORK, [fix for _, fix in self.problems(self.check())])
 
+    def test_leftover_password_reset_line(self):
+        self.paths.my_cnf.write_text("[mysqld]\n# xampp-panel: one-time root password reset (removed right after)\n"
+                                     "init-file=/tmp/xampp-reset-x/reset.sql\nport=3306\n")
+        self.assertIn(("my.cnf still has the one-time password reset line", health.FIX_RESET),
+                      self.problems(self.check()))
+
     def test_broken_ftp_config(self):
         self.paths.proftpd_conf.write_text("UserPassword daemon <?\nphp\n?>\n")
         self.assertIn(health.FIX_FTP, [fix for _, fix in self.problems(self.check())])

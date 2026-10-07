@@ -137,6 +137,7 @@ MySQL/phpMyAdmin passwords and to fix the known ways XAMPP's own `lampp security
 |---|---|
 | Health check | A read-only report: are Apache/MySQL/FTP running and their configs valid, does MySQL have anonymous accounts or a password, can phpMyAdmin log in, are your sites set up. Each problem it finds names the menu item below that fixes it. |
 | Change MySQL root password | Sets (or changes) the MySQL admin password, and removes XAMPP's unprotected "anonymous" account. Do this if the yellow bar is showing, or after `#1044 Access denied for user ''@'localhost'` in phpMyAdmin. |
+| Reset forgotten MySQL root password | For when you no longer know the root password (phpMyAdmin login). Asks for a new one, then stops and starts MySQL twice (a few seconds); MySQL is never open without a password meanwhile. Afterwards it works like "Change MySQL root password". |
 | Show phpMyAdmin pma password | Shows the generated password of phpMyAdmin's own internal account (`pma`). You almost never need to type this yourself — it's for checking the account still has one, or copying it somewhere you manage MariaDB. |
 | Fix phpMyAdmin pma login | Repairs `Access denied for user 'pma'@'localhost'`: recreates phpMyAdmin's internal account to match its own config. |
 | Fix FTP config | Repairs `unknown configuration directive 'function'`, caused by XAMPP's `lampp security` writing broken text into the FTP config. Asks for a new FTP password for the user `daemon`. |
@@ -191,6 +192,7 @@ Before `--remove-xampp`, export any databases you want to keep: phpMyAdmin → E
 | phpMyAdmin says `(HY000/2002): No such file or directory` | MySQL isn't running. Switch it on. |
 | phpMyAdmin says `Access denied for user 'pma'@'localhost'` or "Connection for controluser … failed" | **☰ → Repair & configure → Fix phpMyAdmin pma login.** |
 | phpMyAdmin says `#1044 - Access denied for user ''@'localhost'` when creating a database | You're logged in under the wrong user name. Log out of phpMyAdmin and log in as `root`. To stop it happening, **☰ → Repair & configure → Change MySQL root password** (see the yellow bar above). |
+| Forgot the MySQL root password (can't log in to phpMyAdmin as `root`) | **☰ → Repair & configure → Reset forgotten MySQL root password.** |
 | MySQL log mentions `Please run mysql_upgrade` or `mysql.column_stats` | **☰ → Repair & configure → Run mysql_upgrade.** |
 | MySQL stays yellow ("starting…") and its log says `port: 0` | **☰ → Repair & configure → Turn MySQL networking back on.** |
 | FTP won't start; its error mentions `'function'` | **☰ → Repair & configure → Fix FTP config.** |

@@ -42,6 +42,14 @@ class SqlTest(unittest.TestCase):
         self.assertIn("FROM mysql.user WHERE user = 'root';", sql)
         self.assertTrue(sql.rstrip().endswith("SET @pw = NULL, @accounts = NULL;"))
 
+    def test_reset_root_sql_is_one_statement_per_line_for_the_init_file(self):
+        sql = mysqladmin.reset_root_sql("it's a \\ pw")
+        lines = sql.splitlines()
+        self.assertEqual(lines[-1], "ALTER USER 'root'@'localhost' IDENTIFIED BY 'it''s a \\\\ pw';")
+        self.assertTrue(all(line.endswith(";") for line in lines))
+        with self.assertRaises(ValueError):
+            mysqladmin.reset_root_sql("two\nlines")
+
     def test_pma_account_sql(self):
         sql = mysqladmin.pma_account_sql("p'ma", "s3cret")
         self.assertTrue(sql.startswith(GUARD))

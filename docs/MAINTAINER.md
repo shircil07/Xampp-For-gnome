@@ -59,7 +59,7 @@ answers, not just until `mysqld` exists, and only "access denied" counts as "wro
 connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-226 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+242 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -127,7 +127,7 @@ Design rules:
 | `src/xampp_panel/paths.py` | `Paths` dataclass: **every** filesystem location in one place (tests override it) |
 | `src/xampp_panel/fsutil.py` | `atomic_write` (temp file + rename), `backup_once`, `tail` (last 64 KB) |
 | `src/xampp_panel/services.py` | Service list (Apache :80, MySQL :3306, ProFTPD :21), state detection, log paths |
-| `src/xampp_panel/configedit.py` | Pure, reversible text edits for XAMPP/system config files; lean-mode values; vhost and hosts rendering; ProFTPD broken-password detection/repair, MySQL networking detection |
+| `src/xampp_panel/configedit.py` | Pure, reversible text edits for XAMPP/system config files; lean-mode values; vhost and hosts rendering; ProFTPD broken-password detection/repair, MySQL networking detection, the one-time `init-file` line for a root password reset |
 | `src/xampp_panel/sites.py` | `Site(name, path, uid)`, name validation, `sites.json` load/save, `UNSAFE_PATH_CHARS` |
 | `src/xampp_panel/helper.py` | **Root helper**: validation + whitelisted commands |
 | `src/xampp_panel/privileged.py` | Builds the `pkexec` command, turns exit codes into errors |
@@ -138,7 +138,7 @@ Design rules:
 | `src/xampp_panel/tray.py` | Tray process |
 | `src/xampp_panel/main.py` | Entry point: `--tray` → tray, otherwise panel |
 | `src/xampp_panel/pmaconfig.py` | Pure text `get`/`set` of single-quoted `$cfg['Servers'][$i][...]` settings in phpMyAdmin's `config.inc.php`; never executes the file |
-| `src/xampp_panel/mysqladmin.py` | `MysqlAdmin`: runs XAMPP's `mysql`/`mysql_upgrade` as root, SQL builders (`drop_anonymous_sql`, `set_root_password_sql`, `pma_account_sql`), password rules, SQL escaping |
+| `src/xampp_panel/mysqladmin.py` | `MysqlAdmin`: runs XAMPP's `mysql`/`mysql_upgrade` as root, SQL builders (`drop_anonymous_sql`, `set_root_password_sql`, `reset_root_sql`, `pma_account_sql`), password rules, SQL escaping |
 | `src/xampp_panel/dialogs.py` | `Dialogs`: thin whiptail wrapper (menu, yesno, msgbox, passwordbox, `secret`) |
 | `src/xampp_panel/health.py` | `HealthCheck`: read-only report (services, configs, MySQL accounts, phpMyAdmin login, sites) with the menu item that fixes each problem |
 | `src/xampp_panel/repair.py` | `RepairApp`: the `xampp-repair` menu, its flows, and `first-install`; `main()` |
@@ -183,6 +183,7 @@ Before the first change, each file gets a copy named `<file>.xampp-panel.bak`.
 | `/opt/lampp/etc/my.cnf` | `bind-address=127.0.0.1` added under `[mysqld]` | `# xampp-panel: localhost only` |
 | same | Active `skip-networking` commented out (for good: `harden off` does not restore it) | none; it becomes `#skip-networking` |
 | same | `!include` for lean mode (only if on) | `# BEGIN xampp-panel lean` |
+| same | `init-file=…` under `[mysqld]`, only **during** "Reset forgotten MySQL root password" (removed in a `finally`; the health check flags it if a reset was killed with `kill -9`) | `# xampp-panel: one-time root password reset (removed right after)` |
 | `/opt/lampp/etc/proftpd.conf` | `DefaultAddress 127.0.0.1` + `SocketBindTight on` | `# BEGIN xampp-panel localhost` |
 | same | `UserPassword daemon` replaced with a new hash (`xampp-repair` → "Fix FTP config" only, not `setup.sh`) | none; detected by `configedit.proftpd_password_broken` |
 | `/etc/hosts` | `127.0.0.1  <name>.local` for each site | `# BEGIN xampp-panel sites` |
@@ -386,7 +387,8 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `2d904ca` | `setup.sh` downloads XAMPP 8.2.12 when no installer is found (`lib/xampp-download.sh`), checks its SHA-256 and runs a private copy |
 | `9ea8b88` | Review fixes for the download: pinned file wins over a name that sorts later, folder above the project no longer searched, failed copy ≠ wrong checksum, resumable download with stall timeout, private copy under `/root`, deletes as the user, whole decision in the tested `xampp_prepare` |
 | `63c0489` | Second review: only the pinned file is used automatically (other versions need `--installer`, a hint names them); curl `-q` and stdout to stderr; tests check what runs as the user and that the download really resumes |
-| this task | Third review: the hint's `--installer` path is shell-quoted; `--help` says only the pinned version is checksummed; doc and test-comment precision |
+| `4cdecda` | Third review: the hint's `--installer` path is shell-quoted; `--help` says only the pinned version is checksummed; doc and test-comment precision |
+| this task | "Reset forgotten MySQL root password" (`repair.reset_root_password`, `configedit.mysql_init_file`, `mysqladmin.reset_root_sql`, health finding for a leftover line); a wrong current root password points to it |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -417,6 +419,20 @@ Decisions made during the build (and what they cost if wrong):
   killed after `PROBE_TIMEOUT + 5` s; `execute` and `mysql_upgrade` get `TIMEOUT` (120 s), since
   real work can take long. A hanging probe therefore stretches the 20 s readiness wait by at most
   one probe (about 10 s), not by 120 s per round.
+- **Forgotten root password: `init-file`, not `--skip-grant-tables`.** `reset_root_password` writes
+  one `ALTER USER 'root'@'localhost' IDENTIFIED BY …` line (`mysqladmin.reset_root_sql`) into a
+  0600 file in a fresh 0700 `mkdtemp` folder, both `chown`ed to the `mysql` user that XAMPP's
+  `mysqld_safe` runs `mysqld` as (`MYSQL_USER`), adds `init-file=<that file>` under `[mysqld]`
+  (`configedit.mysql_init_file`, path restricted to `[A-Za-z0-9_./-]`), and starts MySQL with the
+  normal `lampp startmysql`. MariaDB runs the file once at startup **with password checks on**, so
+  unlike `--skip-grant-tables` nobody can connect without a password at any moment, and XAMPP's own
+  start command is reused instead of copied. A `finally` removes the `my.cnf` line and the folder
+  (SIGHUP/SIGTERM also go through it), then MySQL is restarted normally, the new password is
+  verified with a login, and `_set_root_password(new, new)` sets it on the other root accounts
+  (127.0.0.1, ::1), drops anonymous accounts and switches phpMyAdmin to its login page. Cost if
+  wrong: if MariaDB fails on the file, MySQL is started normally again and the user sees the error;
+  only `kill -9` midway can leave the line behind (the health check flags it, the reset replaces it).
+  Not verified against a real MariaDB here (no server in the sandbox).
 - **Esc on a yes/no question:** whiptail exits 255 on Esc; `Dialogs.yesno` raises `Cancelled` then,
   so Esc never counts as "No" (it used to turn localhost-only off in "Re-apply panel config").
 - **XAMPP download:** pinned to one version with a SHA-256 instead of "the newest", because the
@@ -445,6 +461,7 @@ Decisions made during the build (and what they cost if wrong):
 | XAMPP's own `lampp security` would break things (`skip-networking`, FTP config). **Not run any more**: `setup.sh` runs `xampp-repair first-install` instead | Nothing to do on a fresh install. If you ran `lampp security` by hand, see the next three rows |
 | `Access denied for user 'pma'@'localhost'` in the MySQL log or phpMyAdmin | `sudo xampp-repair` → "Fix phpMyAdmin pma login" (§11) |
 | XAMPP ships an anonymous MariaDB account and no root password | `sudo xampp-repair` → "Change MySQL root password" (§11) |
+| Forgotten MySQL root password | `sudo xampp-repair` → "Reset forgotten MySQL root password" |
 | MySQL stuck "starting…", log says `port: 0` (`skip-networking` active) | `sudo xampp-repair` → "Turn MySQL networking back on" |
 | FTP won't start: `unknown configuration directive 'function'` | `sudo xampp-repair` → "Fix FTP config" |
 | Starting `xampp-panel` from SSH/remote terminal fails with "Gtk couldn't be initialized" | Normal: there's no display. Open it from the app menu. Errors are then in `journalctl --user` |
@@ -587,7 +604,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 226 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 242 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 

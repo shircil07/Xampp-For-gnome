@@ -70,6 +70,33 @@ def mysql_hardened(text: str) -> bool:
     return _BIND in text
 
 
+_INIT_MARK = "# xampp-panel: one-time root password reset (removed right after)\n"
+_INIT_LINE = re.compile(r"(?m)^" + re.escape(_INIT_MARK) + r"init-file=.*\n?")
+# Only a plain absolute path: no spaces, newlines or '#' that could break or extend the option file.
+_INIT_PATH = re.compile(r"/[A-Za-z0-9_./-]+")
+
+
+def mysql_init_file(text: str, path: str | None) -> str:
+    """path: put the one-time `init-file=` line (MariaDB runs that SQL file once at startup) under
+    [mysqld], replacing an earlier one; None: remove it. Lines the panel did not write are kept."""
+    text = _INIT_LINE.sub("", text)
+    if path is None:
+        return text
+    if not _INIT_PATH.fullmatch(path):
+        raise ValueError(f"unsafe init-file path: {path!r}")
+    line = f"{_INIT_MARK}init-file={path}\n"
+    new, count = _MYSQLD.subn(lambda m: m[0] + line, text, count=1)
+    if count:
+        return new
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return f"{text}[mysqld]\n{line}"
+
+
+def mysql_init_file_present(text: str) -> bool:
+    return bool(_INIT_LINE.search(text))
+
+
 # "lampp security" pastes the PHP meant to compute the FTP password hash into proftpd.conf.
 _PROFTPD_BROKEN = re.compile(r"(?ms)^UserPassword[ \t]+daemon[ \t]+<\?.*?^\?>[ \t]*$\n?")
 _PROFTPD_PASSWORD = re.compile(r"(?m)^UserPassword[ \t]+daemon[ \t]+.*$\n?")
