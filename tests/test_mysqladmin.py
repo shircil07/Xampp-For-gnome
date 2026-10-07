@@ -130,6 +130,41 @@ class MysqlAdminTest(unittest.TestCase):
         down = RecordingRun(returncode=1, stderr="ERROR 2002 (HY000): Can't connect to local server (2)\n")
         self.assertFalse(mysqladmin.MysqlAdmin(self.paths, down).ping())
 
+    def test_ping_is_false_on_timeout(self):
+        def run(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        self.assertFalse(mysqladmin.MysqlAdmin(self.paths, run).ping())
+
+    def test_login_probes_use_a_short_timeout(self):
+        for probe in (lambda admin: admin.can_login("pma", "pw", "phpmyadmin"), lambda admin: admin.ping()):
+            run = RecordingRun()
+            probe(mysqladmin.MysqlAdmin(self.paths, run))
+            call = run.calls[0]
+            self.assertIn(f"--connect-timeout={mysqladmin.PROBE_TIMEOUT}", call["argv"])
+            self.assertLess(call["kwargs"]["timeout"], mysqladmin.TIMEOUT)
+            self.assertGreater(call["kwargs"]["timeout"], mysqladmin.PROBE_TIMEOUT)
+
+    def test_execute_and_upgrade_keep_the_long_timeout(self):
+        run = RecordingRun()
+        admin = mysqladmin.MysqlAdmin(self.paths, run)
+        admin.execute("SELECT 1;", "")
+        admin.upgrade("")
+        self.assertEqual([c["kwargs"]["timeout"] for c in run.calls], [120, 120])
+        self.assertFalse(any(a.startswith("--connect-timeout") for c in run.calls for a in c["argv"]))
+
+    def test_timeout_message_names_the_real_limit(self):
+        limits = []
+
+        def run(argv, **kwargs):
+            limits.append(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        with self.assertRaisesRegex(mysqladmin.MysqlError, "within 120 seconds"):
+            mysqladmin.MysqlAdmin(self.paths, run).execute("SELECT 1;", "")
+        with self.assertRaises(mysqladmin.MysqlError) as cm:
+            mysqladmin.MysqlAdmin(self.paths, run).can_login("root", "")
+        self.assertIn(f"within {limits[-1]} seconds", str(cm.exception))
+        self.assertNotEqual(limits[-1], 120)
+
     def test_anonymous_accounts(self):
         run = RecordingRun(stdout="''@'localhost'\n''@'zbook'\n")
         self.assertEqual(mysqladmin.MysqlAdmin(self.paths, run).anonymous_accounts(""),

@@ -34,7 +34,7 @@ class RepairError(Exception):
 
 class RepairApp:
     def __init__(self, dialogs, admin, helper, paths: Paths = DEFAULT, run=subprocess.run,
-                 token=secrets.token_urlsafe, mysql_running=None, sleep=time.sleep):
+                 token=secrets.token_urlsafe, mysql_running=None, sleep=time.sleep, clock=time.monotonic):
         self.dialogs = dialogs
         self.admin = admin
         self.helper = helper
@@ -45,6 +45,7 @@ class RepairApp:
         # the client still reaches it through the socket.
         self.mysql_running = mysql_running or (lambda: "mysql" in services.running_services(paths))
         self.sleep = sleep
+        self.clock = clock
         self.check = health.HealthCheck(admin, paths, run)
         self.root_password: str | None = None  # None = not known yet, "" = root has no password
 
@@ -90,9 +91,13 @@ class RepairApp:
             self.helper.lampp(["startmysql"])
             started = True
         # mysqld shows up before it accepts connections; until then every login would fail.
-        for _ in range(MYSQL_START_SECONDS):
+        # A clock, not a count of rounds: a ping that hangs can take seconds itself.
+        deadline = self.clock() + MYSQL_START_SECONDS
+        while True:
             if self.mysql_running() and self.admin.ping():
                 return started
+            if self.clock() >= deadline:
+                break
             self.sleep(1)
         if started:
             raise RepairError("MySQL did not start. Check its log in the panel.")

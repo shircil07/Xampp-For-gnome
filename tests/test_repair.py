@@ -37,13 +37,18 @@ class RepairCase(unittest.TestCase):
         self.helper = fakes.FakeHelper()
         self.run = fakes.FakeRun({"openssl": (0, HASH + "\n", "")})
         self.running = True
+        self.now = 0.0  # the fake monotonic clock; the fake sleep advances it
+
+    def advance(self, seconds):
+        self.now += seconds
 
     def app(self, *answers, token="generated-token", real_mysql_check=False):
         """real_mysql_check: use RepairApp's own /proc-based check instead of self.running."""
         self.dialogs = fakes.FakeDialogs(answers)
         running = None if real_mysql_check else (lambda: self.running)
         return repair.RepairApp(self.dialogs, self.admin, self.helper, self.paths, self.run,
-                                token=lambda n: token, mysql_running=running, sleep=lambda s: None)
+                                token=lambda n: token, mysql_running=running, sleep=self.advance,
+                                clock=lambda: self.now)
 
     def mysqld_without_port(self):
         """A live XAMPP mysqld in the fake /proc, with no port listening (what skip-networking does)."""
@@ -118,7 +123,22 @@ class ChangeRootPasswordTest(RepairCase):
         self.admin.connect_error = CONNECT
         with self.assertRaisesRegex(repair.RepairError, "does not answer"):
             self.app()._ensure_mysql()
-        self.assertEqual(self.admin.pings, repair.MYSQL_START_SECONDS)
+        self.assertEqual(self.admin.pings, repair.MYSQL_START_SECONDS + 1)  # polls at 0, 1, ... 20 s
+        self.assertEqual(self.now, repair.MYSQL_START_SECONDS)
+
+    def test_wait_is_bounded_in_real_time_even_when_pings_hang(self):
+        app = self.app()
+        pings = []
+
+        def slow_ping():
+            pings.append(self.now)
+            self.advance(15)  # each attempt runs into the client's timeout
+            return False
+        app.admin.ping = slow_ping
+        with self.assertRaisesRegex(repair.RepairError, "does not answer"):
+            app._ensure_mysql()
+        self.assertEqual(pings, [0, 16])  # no sleep after the last poll once the deadline passed
+        self.assertEqual(self.now, 31)
 
     def test_connection_error_is_shown_not_taken_as_a_wrong_password(self):
         app = self.app()

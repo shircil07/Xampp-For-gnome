@@ -16,7 +16,9 @@ MIN_PASSWORD = 8
 MAX_PASSWORD = 128
 PMADB = "phpmyadmin"  # the database phpMyAdmin's sql/create_tables.sql creates
 PMA_USER = "pma"  # phpMyAdmin's default control user
-TIMEOUT = 120  # seconds
+TIMEOUT = 120  # seconds, for real work (execute, upgrade)
+PROBE_TIMEOUT = 5  # seconds to connect when only checking a login (can_login, ping)
+_PROBE_LIMIT = PROBE_TIMEOUT + 5  # the whole probe: connect plus "SELECT 1"
 
 # Escaped backslashes only mean the same in every sql_mode once NO_BACKSLASH_ESCAPES is off.
 _SQL_MODE = "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '');\n"
@@ -86,7 +88,7 @@ class MysqlAdmin:
         self.paths = paths
         self.run = run
 
-    def _client(self, program, user: str, password: str, args=(), sql: str = "") -> str:
+    def _client(self, program, user: str, password: str, args=(), sql: str = "", timeout: int = TIMEOUT) -> str:
         name = os.path.basename(str(program))
         fd, option_file = tempfile.mkstemp(prefix="xampp-repair-", suffix=".cnf")  # mode 0600
         try:
@@ -96,9 +98,9 @@ class MysqlAdmin:
                     fh.write(f"password={_option_value(password)}\n")
             argv = [str(program), f"--defaults-extra-file={option_file}", *args]
             try:
-                proc = self.run(argv, input=sql, env=SAFE_ENV, capture_output=True, text=True, timeout=TIMEOUT)
+                proc = self.run(argv, input=sql, env=SAFE_ENV, capture_output=True, text=True, timeout=timeout)
             except subprocess.TimeoutExpired:
-                raise MysqlError(f"{name} did not finish within {TIMEOUT} seconds") from None
+                raise MysqlError(f"{name} did not finish within {timeout} seconds") from None
         finally:
             os.unlink(option_file)
         if proc.returncode != 0:
@@ -111,9 +113,10 @@ class MysqlAdmin:
         return self._client(self.paths.mysql_client, "root", root_password, ["--batch", "--skip-column-names"], sql)
 
     def can_login(self, user: str, password: str, database: str | None = None) -> bool:
-        args = ["--batch", "--skip-column-names"] + ([database] if database else [])
+        args = ["--batch", "--skip-column-names", f"--connect-timeout={PROBE_TIMEOUT}"]
+        args += [database] if database else []
         try:
-            self._client(self.paths.mysql_client, user, password, args, "SELECT 1;\n")
+            self._client(self.paths.mysql_client, user, password, args, "SELECT 1;\n", _PROBE_LIMIT)
         except AccessDenied:
             return False
         return True
