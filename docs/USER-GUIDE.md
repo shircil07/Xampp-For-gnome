@@ -142,13 +142,13 @@ MySQL/phpMyAdmin passwords and to fix the known ways XAMPP's own `lampp security
 | Quit | Closes the menu. If you opened it from the panel, the terminal then shows "Press Enter to close"; press Enter. |
 
 It's safe to open the menu and look around: Health check and Show phpMyAdmin pma password only read.
-Esc or Cancel at any question stops without changing anything, with two exceptions that do their
-work as soon as you choose them: "Fix phpMyAdmin pma login" asks nothing (except the MySQL root
-password, if it needs it and doesn't know it yet), and "Turn MySQL networking back on" fixes the
-config first and then asks whether to restart MySQL (No or Esc there only skips the restart). Items
-that need MySQL start it if it isn't running (the terminal says so), wait until it answers, and
-leave it running. If it doesn't answer within about 20 seconds you get a message saying so; check
-the MySQL log in the panel.
+Esc or Cancel at any question stops without changing anything, with three exceptions that do their
+work as soon as you choose them: "Fix phpMyAdmin pma login" and "Run mysql_upgrade" ask nothing
+(except the MySQL root password, if root has one and the menu doesn't know it yet), and "Turn MySQL
+networking back on" fixes the config first and then asks whether to restart MySQL (No or Esc there
+only skips the restart). Items that need MySQL start it if it isn't running (the terminal says so),
+wait until it answers, and leave it running. If it doesn't answer within about 20 seconds you get a
+message saying so; check the MySQL log in the panel.
 
 ---
 

@@ -78,7 +78,8 @@ are needed. The panel only launches the terminal.
 - `check_login(user, password) -> bool`, `root_has_password() -> bool`, `anonymous_accounts()`.
   (Built as `can_login(user, password, database=None)`: False only when MySQL refuses the login,
   `AccessDenied` for errors 1044/1045/1049/1698; any other client error is raised. `ping()` is True
-  once the server answers at all.)
+  once the server answers at all, including refusals 1040/1129/1130/1862. Probes use a 5 s connect
+  timeout; `execute`/`mysql_upgrade` keep 120 s.)
 - Root password validation: 8–128 chars, no control characters, kept verbatim (spaces allowed).
 
 **`dialogs.py`** — `Dialogs` wraps whiptail (`menu`, `yesno`, `msgbox`, `textbox`,
@@ -111,8 +112,9 @@ lean mode) instead of detecting markers, because a XAMPP upgrade removes them to
 
 MySQL-dependent items start MySQL first if it isn't running (and say so: a "Starting MySQL" line
 on the terminal, no extra keypress). "Running" means a live XAMPP `mysqld` process, even when its
-port is not listening (`skip-networking`); they then wait (up to 20 s in total) until the server
-answers (`MysqlAdmin.ping`). A connection error is reported as an error, never as a wrong password.
+port is not listening (`skip-networking`); they then wait until the server answers
+(`MysqlAdmin.ping`), against a 20 s monotonic deadline (a probe already running at the deadline may
+add up to its own ~10 s limit). A connection error is reported as an error, never as a wrong password.
 The health check shows it as "MySQL: cannot connect: …".
 
 ### First-install flow (`xampp-repair first-install`, replaces `lampp security` in `setup.sh`)

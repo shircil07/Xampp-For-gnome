@@ -54,12 +54,12 @@ in is left alone (otherwise it is set up fresh), and if root already has a passw
 skipped with a note pointing at "Change MySQL root password". The root step never asks for the
 current root password itself; if the `pma` step already had to ask for it, it is used to drop the
 anonymous accounts too, otherwise they are left alone. Notes are printed after the last dialog.
-Before any of this, `xampp-repair` waits (up to 20 s) until MySQL actually answers, not just until
-`mysqld` exists, and only "access denied" counts as "wrong password": a connection error is shown
-as an error, never read as "root has a password".
+Before any of this, `xampp-repair` waits (about 20 s, measured on a clock) until MySQL actually
+answers, not just until `mysqld` exists, and only "access denied" counts as "wrong password": a
+connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-192 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+199 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -377,7 +377,10 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `30c84d7` | Fix wave 2: `harden off` no longer restores `skip-networking`; old restore markers are dropped |
 | `c953c2b` | Fix wave 2: first install drops anonymous accounts when the root password is known from the `pma` step |
 | `b3cee33` | Fix wave 2: test tidying |
-| this task | Docs for fix wave 2 |
+| `e9b6bbf` | Docs for fix wave 2 |
+| `b927dd7` | Fix wave 3: login probes (`can_login`, `ping`) use `--connect-timeout=5` and a 10 s limit instead of 120 s; `_ensure_mysql` waits on a monotonic deadline (injected `clock`), not a count of rounds |
+| `9fc18fa` | Fix wave 3: `ping()` also counts errors 1040/1129/1130/1862 as "the server answers"; `can_login` still raises them |
+| this task | Docs for fix wave 3 (USER-GUIDE: "Run mysql_upgrade" acts without a question) |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -399,8 +402,15 @@ Decisions made during the build (and what they cost if wrong):
 - **"Wrong password" vs "cannot connect":** `MysqlAdmin.can_login` answers False only when MySQL
   refused the login (errors 1044, 1045, 1049, 1698 in the client's stderr → `AccessDenied`). Any
   other client error (e.g. 2002, socket missing while MySQL starts) is raised, so a starting server
-  is never mistaken for "root has a password". `ping()` treats both success and `AccessDenied` as
-  "the server answers"; `_ensure_mysql` polls it for up to `MYSQL_START_SECONDS`.
+  is never mistaken for "root has a password". `ping()` treats success, `AccessDenied` and the
+  refusals that are not about the password (1040 too many connections, 1129 host blocked, 1130 host
+  not allowed, 1862 password expired) as "the server answers"; `can_login` still raises those, so
+  the caller shows MySQL's own message. `_ensure_mysql` polls `ping()` once a second until a
+  monotonic deadline of `MYSQL_START_SECONDS` (20 s) and does not sleep after the last poll.
+- **Timeouts:** probes (`can_login`, `ping`) pass `--connect-timeout=PROBE_TIMEOUT` (5 s) and are
+  killed after `PROBE_TIMEOUT + 5` s; `execute` and `mysql_upgrade` get `TIMEOUT` (120 s), since
+  real work can take long. A hanging probe therefore stretches the 20 s readiness wait by at most
+  one probe (about 10 s), not by 120 s per round.
 - **Esc on a yes/no question:** whiptail exits 255 on Esc; `Dialogs.yesno` raises `Cancelled` then,
   so Esc never counts as "No" (it used to turn localhost-only off in "Re-apply panel config").
 - **Minimum platform:** GTK 4.6 / libadwaita 1.1 / GLib 2.72. Newer widgets (`Adw.Banner`, `Gtk.FileDialog`) are used only when available.
@@ -543,7 +553,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 192 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 199 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 
