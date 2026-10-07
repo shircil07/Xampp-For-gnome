@@ -39,14 +39,16 @@ _BIND = "# xampp-panel: localhost only\nbind-address=127.0.0.1\n"
 # XAMPP's "lampp security" adds skip-networking, which turns TCP off entirely ("port: 0"):
 # clients using 127.0.0.1 fail and the panel never sees port 3306. bind-address keeps it local instead.
 _SKIP_NET = re.compile(r"(?m)^(skip[-_]networking\b.*)$")
-_SKIP_NET_OFF = re.compile(r"(?m)^# xampp-panel: was \"(skip[-_]networking\b.*)\"\n#skip-networking$")
+# Older versions kept skip-networking behind this marker to restore it on harden off; that is gone.
+_OLD_MARKER = re.compile(r"(?m)^# xampp-panel: was \"skip[-_]networking\b.*\"\n(?=#skip-networking$)")
 
 
 def mysql_localhost(text: str, on: bool) -> str:
-    text = text.replace(_BIND, "")
+    """on: listen on 127.0.0.1 only. Both ways leave skip-networking commented out: it never comes back."""
+    text = _OLD_MARKER.sub("", text.replace(_BIND, ""))
     if not on:
-        return _SKIP_NET_OFF.sub(lambda m: m[1], text)
-    text = _SKIP_NET.sub(lambda m: f'# xampp-panel: was "{m[1]}"\n#skip-networking', text)
+        return text
+    text = mysql_networking_on(text)
     new, count = _MYSQLD.subn(lambda m: m[0] + _BIND, text, count=1)
     if count:
         return new
@@ -60,8 +62,7 @@ def mysql_networking_off(text: str) -> bool:
 
 
 def mysql_networking_on(text: str) -> str:
-    """Comments out skip-networking and nothing else: no restore marker, bind-address untouched,
-    so turning harden off later does not switch networking off again."""
+    """Comments out skip-networking and nothing else: bind-address is harden's business."""
     return _SKIP_NET.sub(lambda m: f"#{m[1]}", text)
 
 

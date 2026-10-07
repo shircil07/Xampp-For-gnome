@@ -51,14 +51,24 @@ class MysqlLocalhostTest(unittest.TestCase):
         on = configedit.mysql_localhost("[client]\nport=3306\n", True)
         self.assertTrue(on.endswith("[mysqld]\n# xampp-panel: localhost only\nbind-address=127.0.0.1\n"))
 
-    def test_disables_skip_networking(self):
+    def test_disables_skip_networking_for_good(self):
         text = MYCNF + "#skip-networking\nskip-networking\n"
         on = configedit.mysql_localhost(text, True)
         self.assertNotRegex(on, r"(?m)^skip-networking")
-        self.assertIn('# xampp-panel: was "skip-networking"\n#skip-networking\n', on)
-        self.assertIn("#skip-networking\n# xampp-panel", on)  # XAMPP's own commented line is untouched
+        self.assertNotIn("xampp-panel: was", on)
         self.assertEqual(configedit.mysql_localhost(on, True), on)
-        self.assertEqual(configedit.mysql_localhost(on, False), text)
+        off = configedit.mysql_localhost(on, False)  # harden off (--allow-lan) keeps TCP on
+        self.assertEqual(off, MYCNF + "#skip-networking\n#skip-networking\n")
+        self.assertFalse(configedit.mysql_networking_off(off))
+
+    def test_old_restore_marker_is_dropped(self):
+        old = configedit.mysql_localhost(MYCNF, True) + '# xampp-panel: was "skip_networking"\n#skip-networking\n'
+        for on in (True, False):
+            with self.subTest(on=on):
+                new = configedit.mysql_localhost(old, on)
+                self.assertNotIn("xampp-panel: was", new)
+                self.assertTrue(new.endswith("port=3306\nsocket=/opt/lampp/var/mysql/mysql.sock\n#skip-networking\n"))
+                self.assertFalse(configedit.mysql_networking_off(new))
 
 
 HASH = "$6$abcdefgh12345678$" + "A" * 86
