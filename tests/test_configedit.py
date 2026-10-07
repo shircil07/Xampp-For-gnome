@@ -154,12 +154,12 @@ class MysqlInitFileTest(unittest.TestCase):
         on = configedit.mysql_init_file(MYCNF, "/tmp/xampp-reset-ab_1/reset.sql")
         self.assertIn("[mysqld]\n# xampp-panel: one-time root password reset (removed right after)\n"
                       "init-file=/tmp/xampp-reset-ab_1/reset.sql\nport=3306", on)
-        self.assertTrue(configedit.mysql_init_file_present(on))
+        self.assertEqual(configedit.mysql_init_file_path(on), "/tmp/xampp-reset-ab_1/reset.sql")
         again = configedit.mysql_init_file(on, "/tmp/xampp-reset-cd/reset.sql")
         self.assertEqual(again.count("init-file="), 1)
         self.assertIn("init-file=/tmp/xampp-reset-cd/reset.sql", again)
         self.assertEqual(configedit.mysql_init_file(again, None), MYCNF)
-        self.assertFalse(configedit.mysql_init_file_present(MYCNF))
+        self.assertIsNone(configedit.mysql_init_file_path(MYCNF))
 
     def test_adds_section_when_missing(self):
         on = configedit.mysql_init_file("[client]\nport=3306", "/tmp/x/reset.sql")
@@ -168,7 +168,7 @@ class MysqlInitFileTest(unittest.TestCase):
 
     def test_leaves_an_init_file_line_it_did_not_write(self):
         text = MYCNF + "init-file=/etc/mysql/mine.sql\n"
-        self.assertFalse(configedit.mysql_init_file_present(text))
+        self.assertIsNone(configedit.mysql_init_file_path(text))
         self.assertEqual(configedit.mysql_init_file(text, None), text)
 
     def test_refuses_paths_that_could_break_the_option_file(self):

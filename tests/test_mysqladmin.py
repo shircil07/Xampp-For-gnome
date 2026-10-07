@@ -42,13 +42,17 @@ class SqlTest(unittest.TestCase):
         self.assertIn("FROM mysql.user WHERE user = 'root';", sql)
         self.assertTrue(sql.rstrip().endswith("SET @pw = NULL, @accounts = NULL;"))
 
-    def test_reset_root_sql_is_one_statement_per_line_for_the_init_file(self):
-        sql = mysqladmin.reset_root_sql("it's a \\ pw")
-        lines = sql.splitlines()
-        self.assertEqual(lines[-1], "ALTER USER 'root'@'localhost' IDENTIFIED BY 'it''s a \\\\ pw';")
-        self.assertTrue(all(line.endswith(";") for line in lines))
-        with self.assertRaises(ValueError):
-            mysqladmin.reset_root_sql("two\nlines")
+    def test_native_password_hash_matches_mariadb_password_function(self):
+        # SELECT PASSWORD('password') on MariaDB/MySQL
+        self.assertEqual(mysqladmin.native_password_hash("password"), "*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19")
+
+    def test_reset_root_sql_holds_only_the_hash(self):
+        password = "it's a \\ pw"
+        sql = mysqladmin.reset_root_sql(password)
+        digest = mysqladmin.native_password_hash(password)
+        self.assertEqual(sql, f"ALTER USER 'root'@'localhost' IDENTIFIED BY PASSWORD '{digest}';\n")
+        self.assertRegex(digest, r"^\*[0-9A-F]{40}$")
+        self.assertNotIn("it's", sql)
 
     def test_pma_account_sql(self):
         sql = mysqladmin.pma_account_sql("p'ma", "s3cret")

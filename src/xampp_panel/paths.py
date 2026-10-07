@@ -10,6 +10,7 @@ class Paths:
     app: Path = Path("/opt/xampp-panel")
     hosts: Path = Path("/etc/hosts")
     proc: Path = Path("/proc")
+    runtime: Path = Path("/run/xampp-panel")  # tmpfs: xampp-repair's short-lived files, gone at reboot
 
     @property
     def lampp_script(self) -> Path:

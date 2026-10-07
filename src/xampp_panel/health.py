@@ -84,13 +84,10 @@ class HealthCheck:
         p = self.paths
         findings = []
         try:
-            my_cnf = p.my_cnf.read_text()
-            if configedit.mysql_networking_off(my_cnf):
+            if configedit.mysql_networking_off(p.my_cnf.read_text()):
                 findings.append(Finding(False, "MySQL networking is switched off (skip-networking)", FIX_NETWORK))
             else:
                 findings.append(Finding(True, "MySQL networking is on"))
-            if configedit.mysql_init_file_present(my_cnf):  # only if a reset was killed midway
-                findings.append(Finding(False, "my.cnf still has the one-time password reset line", FIX_RESET))
         except OSError as e:
             findings.append(Finding(False, f"Cannot read {p.my_cnf}: {e}"))
         ok, detail = self.command([p.apachectl, "-t"])

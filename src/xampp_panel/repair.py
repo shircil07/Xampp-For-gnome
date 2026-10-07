@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,8 +25,10 @@ from .mysqladmin import (PMA_USER, PMADB, MysqlAdmin, MysqlError, drop_anonymous
 from .paths import DEFAULT, Paths
 
 PMA_PASSWORD_BYTES = 24  # secrets.token_urlsafe(24): 32 characters from [A-Za-z0-9_-]
-MYSQL_START_SECONDS = 20  # also the limit for MySQL to stop
-MYSQL_USER = "mysql"  # XAMPP's mysqld_safe runs mysqld as this user; it must read the reset file
+MYSQL_WAIT_SECONDS = 20  # how long MySQL may take to start (and answer) or to stop
+MYSQL_USER = "mysql"  # XAMPP's mysqld_safe runs mysqld as this user; its group may read the reset file
+RESET_FILE = "reset.sql"
+_CLEANUP_SIGNALS = {signal.SIGINT, signal.SIGHUP, signal.SIGTERM}
 USAGE = "usage: sudo xampp-repair [first-install]"
 _FAILURES = (MysqlError, HelperFailure, OSError, ValueError, subprocess.SubprocessError)
 # The control user's password gets reset, so it must not be able to name root or anything odd.
@@ -44,7 +47,7 @@ def _mysql_account() -> tuple[int, int]:
 class RepairApp:
     def __init__(self, dialogs, admin, helper, paths: Paths = DEFAULT, run=subprocess.run,
                  token=secrets.token_urlsafe, mysql_running=None, sleep=time.sleep, clock=time.monotonic,
-                 mysql_account=_mysql_account, chown=os.chown, reset_dir=None):
+                 mysql_account=_mysql_account, chown=os.chown):
         self.dialogs = dialogs
         self.admin = admin
         self.helper = helper
@@ -57,8 +60,7 @@ class RepairApp:
         self.sleep = sleep
         self.clock = clock
         self.mysql_account = mysql_account  # (uid, gid) of MYSQL_USER
-        self.chown = chown
-        self.reset_dir = reset_dir  # where the one-time reset folder goes (None: the system temp dir)
+        self.chown = chown  # os.chown: takes a path or an open file descriptor
         self.check = health.HealthCheck(admin, paths, run)
         self.root_password: str | None = None  # None = not known yet, "" = root has no password
 
@@ -112,9 +114,9 @@ class RepairApp:
         return started
 
     def _wait_until(self, condition) -> bool:
-        """Polls once a second for up to MYSQL_START_SECONDS. A clock, not a count of rounds:
+        """Polls once a second for up to MYSQL_WAIT_SECONDS. A clock, not a count of rounds:
         a ping that hangs can take seconds itself."""
-        deadline = self.clock() + MYSQL_START_SECONDS
+        deadline = self.clock() + MYSQL_WAIT_SECONDS
         while True:
             if condition():
                 return True
@@ -142,7 +144,8 @@ class RepairApp:
                         self.root_password = answer
                         break
                     self.dialogs.msgbox("That password is not right. Try again.\n\n"
-                                        f"Forgotten it? Press Esc, then choose “{health.FIX_RESET}”.")
+                                        f"Forgotten it? Press Esc, then use “{health.FIX_RESET}” "
+                                        "in sudo xampp-repair.")
         return self.root_password
 
     def _new_password(self, prompt: str, allow_skip: bool = False) -> str | None:
@@ -185,53 +188,110 @@ class RepairApp:
 
     def reset_root_password(self) -> None:
         """For a forgotten root password: MariaDB sets it from a one-time init-file at startup, with
-        password checks on all the time (never --skip-grant-tables). The file and its my.cnf line
-        are removed whatever happens, then MySQL is started normally."""
+        password checks on all the time (never --skip-grant-tables). The file holds only the
+        password's hash; it and its my.cnf line are removed whatever happens, then MySQL is started
+        normally and the real password is set over stdin like "Change MySQL root password" does."""
         if not self.dialogs.yesno("Use this only if you have forgotten the MySQL root password.\n\n"
                                   "MySQL is stopped and started twice, which takes a few seconds. Continue?"):
             return
-        new = self._new_password("New MySQL root password:")
         try:
-            uid, gid = self.mysql_account()
+            _, gid = self.mysql_account()
         except KeyError:
-            raise RepairError(f"There is no '{MYSQL_USER}' user, so MySQL could not read the reset file.") from None
+            raise RepairError(f"There is no '{MYSQL_USER}' user, so the reset cannot work. "
+                              "Nothing was changed.") from None
+        new = self._new_password("New MySQL root password:")
+        runtime = self._runtime_dir()
+        was_running = self.mysql_running()
         self._stop_mysql()
         error = folder = None
         try:
-            folder = Path(tempfile.mkdtemp(prefix="xampp-reset-", dir=self.reset_dir))  # mode 0700
-            self._start_with_reset_file(folder, uid, gid, reset_root_sql(new))
+            folder = Path(tempfile.mkdtemp(prefix="reset-", dir=runtime))
+            self._start_with_reset_file(self._write_reset_file(folder, gid, reset_root_sql(new)))
         except (RepairError, *_FAILURES) as e:
             error = e
         finally:
-            conf = self.paths.my_cnf
-            text = conf.read_text()
-            if configedit.mysql_init_file_present(text):
-                fsutil.atomic_write(conf, configedit.mysql_init_file(text, None))
-            if folder:
-                shutil.rmtree(folder, ignore_errors=True)
-        # Start normally, so MySQL no longer runs with the reset file loaded.
-        self._stop_mysql()
-        self._ensure_mysql()
+            self._remove_reset(folder)
+        self._restart_after_reset(error)
         if error:
             raise RepairError(f"The reset did not work: {error}\n\nMySQL was started normally again; "
                               "its log in the panel may say why.")
         if not self.admin.can_login("root", new):
             raise RepairError("MySQL started, but the new password does not work. Check the MySQL log in the panel.")
+        self.root_password = new
         self._set_root_password(new, new)  # the other root accounts, anonymous accounts, phpMyAdmin login
+        if not was_running:
+            self._stop_mysql()  # leave MySQL the way it was
         self.dialogs.msgbox("Done. Log in to phpMyAdmin as 'root' with the new password.")
 
-    def _start_with_reset_file(self, folder: Path, uid: int, gid: int, sql: str) -> None:
-        sql_file = folder / "reset.sql"
-        fd = os.open(sql_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    def _runtime_dir(self) -> Path:
+        """paths.runtime (tmpfs), created if needed; refused unless it is a real, root-only-writable folder."""
+        base = self.paths.runtime
+        base.mkdir(mode=0o755, exist_ok=True)
+        info = os.lstat(base)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise RepairError(f"{base} is not a private folder of root's. Remove it and try again.")
+        return base
+
+    def _write_reset_file(self, folder: Path, gid: int, sql: str) -> Path:
+        """root:mysql, folder 0710 and file 0640: mysqld can read the file but nobody but root can
+        swap, rename or change it. The file's group is set through its open handle, never its path."""
+        self.chown(folder, 0, gid)
+        os.chmod(folder, 0o710)
+        sql_file = folder / RESET_FILE
+        fd = os.open(sql_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            self.chown(fd, 0, gid)
+            os.fchmod(fd, 0o640)
             fh.write(sql)
-        for path in (folder, sql_file):  # only root and mysqld's user can reach the password
-            self.chown(path, uid, gid)
+        return sql_file
+
+    def _start_with_reset_file(self, sql_file: Path) -> None:
         conf = self.paths.my_cnf
         self._write(conf, configedit.mysql_init_file(conf.read_text(), str(sql_file)))
         self.helper.lampp(["startmysql"])
         if not self._wait_until(lambda: self.mysql_running() and self.admin.ping()):
             raise RepairError("MySQL did not start with the reset file.")
+
+    def _remove_reset(self, folder: Path | None) -> None:
+        """The reset folder first (it is what matters), then the my.cnf line. Ctrl-C, closing the
+        terminal or a kill wait until this is done."""
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _CLEANUP_SIGNALS)
+        try:
+            if folder:
+                shutil.rmtree(folder)
+            conf = self.paths.my_cnf
+            text = conf.read_text()
+            if configedit.mysql_init_file_path(text) is not None:
+                self._write(conf, configedit.mysql_init_file(text, None))
+        except OSError as e:
+            raise RepairError(f"Could not clean up after the reset: {e}\n\nRemove the line starting with "
+                              f"'init-file=' from {self.paths.my_cnf} and the folder {folder} "
+                              "before starting MySQL again.") from None
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+    def _restart_after_reset(self, error) -> None:
+        """Start MySQL normally, so it no longer runs with the reset file loaded."""
+        try:
+            self._stop_mysql()
+            self._ensure_mysql()
+        except (RepairError, *_FAILURES) as e:
+            what = (f"The reset itself did not work either: {error}" if error else
+                    "The new password may already work for root@localhost; running this again is safe.")
+            raise RepairError(f"MySQL could not be started normally again: {e}\n\n{what}") from None
+
+    def remove_stale_reset(self) -> str | None:
+        """A reset killed with kill -9 leaves its my.cnf line (and maybe its folder): every MySQL start
+        would run it again. Removed when xampp-repair starts; returns a note if there was one."""
+        conf = self.paths.my_cnf
+        if not conf.exists():
+            return None
+        path = configedit.mysql_init_file_path(conf.read_text())
+        if path is None:
+            return None
+        folder = Path(path).parent
+        self._remove_reset(folder if folder.parent == self.paths.runtime and folder.exists() else None)
+        return f"Removed a root password reset left over from an interrupted run ({path})."
 
     def _set_root_password(self, current: str, new: str | None) -> None:
         """Drop anonymous accounts and set the root password; only then give phpMyAdmin a login page."""
@@ -418,6 +478,12 @@ def main(argv=None) -> int:
     exit_on_signals()
     app = RepairApp(Dialogs(), MysqlAdmin(), Helper())
     try:
+        try:
+            note = app.remove_stale_reset()
+        except RepairError as e:
+            note = f"warning: {e}"
+        if note:
+            print(note, file=sys.stderr)
         return app.first_install() if argv else app.main_menu()
     except KeyboardInterrupt:
         return 130

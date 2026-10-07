@@ -1918,4 +1918,8 @@ git -c user.name="Shiron Cilia" -c user.email="shircil07@gmail.com" commit -m "d
   5. Show phpMyAdmin pma password: shows a 32-character password.
   6. Change MySQL root password, with a password containing a space and a `"`; log in to phpMyAdmin with it.
   7. `sudo xampp-repair` from a plain terminal works too.
+  8. (Added 2026-10-07.) Reset forgotten MySQL root password: choose a new password, then check:
+     phpMyAdmin accepts it; `grep -i init_file /opt/lampp/var/mysql/*.err | tail` shows the init
+     file ran without errors; `grep init-file /opt/lampp/etc/my.cnf` prints nothing;
+     `sudo ls /run/xampp-panel` is empty.
 - [ ] **Step 4:** Give the user the push command (`git push origin master`).

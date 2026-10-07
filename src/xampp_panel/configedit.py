@@ -71,7 +71,7 @@ def mysql_hardened(text: str) -> bool:
 
 
 _INIT_MARK = "# xampp-panel: one-time root password reset (removed right after)\n"
-_INIT_LINE = re.compile(r"(?m)^" + re.escape(_INIT_MARK) + r"init-file=.*\n?")
+_INIT_LINE = re.compile(r"(?m)^" + re.escape(_INIT_MARK) + r"init-file=(.*)\n?")
 # Only a plain absolute path: no spaces, newlines or '#' that could break or extend the option file.
 _INIT_PATH = re.compile(r"/[A-Za-z0-9_./-]+")
 
@@ -93,8 +93,10 @@ def mysql_init_file(text: str, path: str | None) -> str:
     return f"{text}[mysqld]\n{line}"
 
 
-def mysql_init_file_present(text: str) -> bool:
-    return bool(_INIT_LINE.search(text))
+def mysql_init_file_path(text: str) -> str | None:
+    """The file named by the panel's one-time init-file line, if one is there."""
+    m = _INIT_LINE.search(text)
+    return m[1] if m else None
 
 
 # "lampp security" pastes the PHP meant to compute the FTP password hash into proftpd.conf.

@@ -11,6 +11,7 @@ from unittest import mock
 
 import fakes
 from xampp_panel import configedit, health, pmaconfig, repair
+from xampp_panel.mysqladmin import native_password_hash
 from xampp_panel.paths import Paths
 from xampp_panel.services import State
 
@@ -27,7 +28,8 @@ class RepairCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        self.paths = Paths(lampp=root / "lampp", app=root / "app", hosts=root / "hosts", proc=root / "proc")
+        self.paths = Paths(lampp=root / "lampp", app=root / "app", hosts=root / "hosts", proc=root / "proc",
+                           runtime=root / "run")
         for d in ("lampp/etc", "lampp/phpmyadmin/sql", "lampp/sbin", "app/state"):
             (root / d).mkdir(parents=True)
         self.paths.phpmyadmin_conf.write_text(PMA_XAMPP)
@@ -40,8 +42,6 @@ class RepairCase(unittest.TestCase):
         self.run = fakes.FakeRun({"openssl": (0, HASH + "\n", "")})
         self.running = True
         self.now = 0.0  # the fake monotonic clock; the fake sleep advances it
-        self.reset_dir = root / "reset"
-        self.reset_dir.mkdir()
         self.chowns = []
 
     def advance(self, seconds):
@@ -54,8 +54,7 @@ class RepairCase(unittest.TestCase):
         return repair.RepairApp(self.dialogs, self.admin, self.helper, self.paths, self.run,
                                 token=lambda n: token, mysql_running=running, sleep=self.advance,
                                 clock=lambda: self.now, mysql_account=lambda: (1234, 1235),
-                                chown=lambda path, uid, gid: self.chowns.append((Path(path), uid, gid)),
-                                reset_dir=self.reset_dir)
+                                chown=lambda target, uid, gid: self.chowns.append((target, uid, gid)))
 
     def mysqld_without_port(self):
         """A live XAMPP mysqld in the fake /proc, with no port listening (what skip-networking does)."""
@@ -130,8 +129,8 @@ class ChangeRootPasswordTest(RepairCase):
         self.admin.connect_error = CONNECT
         with self.assertRaisesRegex(repair.RepairError, "does not answer"):
             self.app()._ensure_mysql()
-        self.assertEqual(self.admin.pings, repair.MYSQL_START_SECONDS + 1)  # polls at 0, 1, ... 20 s
-        self.assertEqual(self.now, repair.MYSQL_START_SECONDS)
+        self.assertEqual(self.admin.pings, repair.MYSQL_WAIT_SECONDS + 1)  # polls at 0, 1, ... 20 s
+        self.assertEqual(self.now, repair.MYSQL_WAIT_SECONDS)
 
     def test_wait_is_bounded_in_real_time_even_when_pings_hang(self):
         app = self.app()
@@ -411,16 +410,18 @@ class FirstInstallTest(RepairCase):
 
 
 class FakeMysqlServer(fakes.FakeHelper):
-    """lampp stop/start flip the running flag. A start reads my.cnf's init-file the way MariaDB does
-    and runs its ALTER USER; start_fails makes a start with an init-file never come up."""
+    """lampp stop/start flip the running flag. A start reads my.cnf's init-file the way MariaDB does:
+    a hash it recognises (one of `passwords`) becomes root's password. start_fails: a start with an
+    init-file never comes up. exit_on_init_start: the program is killed during that start."""
 
-    def __init__(self, case, honour_init_file=True, start_fails=False, exit_on_init_start=False):
+    def __init__(self, case, passwords=(), start_fails=False, exit_on_init_start=False, normal_start_fails=False):
         super().__init__()
         self.case = case
-        self.honour_init_file = honour_init_file
+        self.hashes = {native_password_hash(pw): pw for pw in passwords}
         self.start_fails = start_fails
         self.exit_on_init_start = exit_on_init_start
-        self.init_files = []  # (mode, sql) of every init-file a start saw
+        self.normal_start_fails = normal_start_fails
+        self.init_files = []  # (folder mode, file mode, contents) of every init-file a start saw
 
     def lampp(self, actions):
         super().lampp(actions)
@@ -429,16 +430,19 @@ class FakeMysqlServer(fakes.FakeHelper):
                 self.case.running = False
             elif action == "startmysql":
                 m = re.search(r"(?m)^init-file=(.*)$", self.case.paths.my_cnf.read_text())
-                if m:
-                    path = Path(m[1])
-                    self.init_files.append((stat.S_IMODE(path.stat().st_mode), path.read_text()))
-                    if self.exit_on_init_start:
-                        raise SystemExit(143)
-                    if self.start_fails:
-                        continue
-                    pw = re.search(r"IDENTIFIED BY '((?:[^']|'')*)';", path.read_text())
-                    if self.honour_init_file and pw:
-                        self.case.admin.root_password = pw[1].replace("''", "'").replace("\\\\", "\\")
+                if not m:
+                    self.case.running = not self.normal_start_fails
+                    continue
+                path = Path(m[1])
+                self.init_files.append((stat.S_IMODE(path.parent.stat().st_mode),
+                                        stat.S_IMODE(path.stat().st_mode), path.read_text()))
+                if self.exit_on_init_start:
+                    raise SystemExit(143)
+                if self.start_fails:
+                    continue
+                digest = re.search(r"IDENTIFIED BY PASSWORD '(\*[0-9A-F]{40})';", path.read_text())
+                if digest and digest[1] in self.hashes:
+                    self.case.admin.root_password = self.hashes[digest[1]]  # what MariaDB would now accept
                 self.case.running = True
 
 
@@ -448,16 +452,19 @@ class ResetRootPasswordTest(RepairCase):
         self.admin.root_password = "forgotten 1"
         self.original_cnf = self.paths.my_cnf.read_text()
 
-    def server(self, **kw):
-        self.helper = FakeMysqlServer(self, **kw)
+    def server(self, passwords=(NEW,), **kw):
+        self.helper = FakeMysqlServer(self, passwords, **kw)
         return self.helper
 
     def lampp_calls(self):
         return [actions for kind, actions in self.helper.calls if kind == "lampp"]
 
+    def leftovers(self):
+        return list(self.paths.runtime.iterdir()) if self.paths.runtime.exists() else []
+
     def assert_cleaned_up(self):
         self.assertEqual(self.paths.my_cnf.read_text(), self.original_cnf)
-        self.assertEqual(list(self.reset_dir.iterdir()), [])
+        self.assertEqual(self.leftovers(), [])
 
     def test_resets_through_an_init_file_then_finishes_like_a_password_change(self):
         server = self.server()
@@ -465,22 +472,27 @@ class ResetRootPasswordTest(RepairCase):
         app.reset_root_password()
         self.assertEqual(self.admin.root_password, NEW)
         self.assertEqual(self.lampp_calls(), [["stopmysql"], ["startmysql"], ["stopmysql"], ["startmysql"]])
-        mode, sql = server.init_files[0]
-        self.assertEqual(mode, 0o600)
-        self.assertIn(f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{NEW}';", sql)
-        self.assertEqual({uid for _, uid, _ in self.chowns}, {1234})
-        self.assertEqual(len(self.chowns), 2)  # the folder and the file, for the mysql user
+        self.assertEqual(len(server.init_files), 1)  # the normal restart no longer sees the file
+        folder_mode, file_mode, sql = server.init_files[0]
+        self.assertEqual((folder_mode, file_mode), (0o710, 0o640))
+        self.assertIn("IDENTIFIED BY PASSWORD '*", sql)
+        self.assertNotIn(NEW, sql)
+        folder, fd = self.chowns[0][0], self.chowns[1][0]
+        self.assertEqual(self.chowns, [(folder, 0, 1235), (fd, 0, 1235)])  # root:mysql, never the mysql uid
+        self.assertEqual(Path(folder).parent, self.paths.runtime)
+        self.assertIsInstance(fd, int)  # the file is changed through its open handle, not its path
         self.assert_cleaned_up()
         self.assertEqual(self.admin.anonymous, [])
         self.assertEqual(self.pma("auth_type"), "cookie")
         self.assertEqual(app.root_password, NEW)
-        self.assertIn("Done", self.dialogs.messages()[-1])
+        self.assertEqual(self.dialogs.messages()[-1], "Done. Log in to phpMyAdmin as 'root' with the new password.")
 
-    def test_mysql_stopped_at_the_start_is_not_stopped_first(self):
+    def test_mysql_stopped_at_the_start_is_stopped_again_at_the_end(self):
         self.server()
         self.running = False
         self.app(True, NEW, NEW).reset_root_password()
-        self.assertEqual(self.lampp_calls(), [["startmysql"], ["stopmysql"], ["startmysql"]])
+        self.assertEqual(self.lampp_calls(), [["startmysql"], ["stopmysql"], ["startmysql"], ["stopmysql"]])
+        self.assertFalse(self.running)
         self.assertEqual(self.admin.root_password, NEW)
 
     def test_no_or_escape_changes_nothing(self):
@@ -493,43 +505,120 @@ class ResetRootPasswordTest(RepairCase):
                 self.assertEqual(self.admin.root_password, "forgotten 1")
                 self.assert_cleaned_up()
 
+    def test_missing_mysql_user_is_found_before_asking_for_a_password(self):
+        self.server()
+        app = self.app(True)
+        app.mysql_account = mock.Mock(side_effect=KeyError("mysql"))
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("There is no 'mysql' user, so the reset cannot work. Nothing was changed.",
+                      self.dialogs.messages()[-1])
+        self.assertEqual(self.lampp_calls(), [])
+
+    def test_a_runtime_folder_that_is_not_private_is_refused_before_stopping_mysql(self):
+        self.server()
+        self.paths.runtime.mkdir(mode=0o777)
+        self.paths.runtime.chmod(0o777)
+        app = self.app(True, NEW, NEW)
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("not a private", self.dialogs.messages()[-1])
+        self.assertEqual(self.lampp_calls(), [])
+
     def test_mysql_not_coming_up_with_the_file_is_cleaned_up_and_started_normally(self):
         self.server(start_fails=True)
         app = self.app(True, NEW, NEW)
         self.assertFalse(app._attempt(app.reset_root_password))
-        self.assertIn("did not work", self.dialogs.messages()[-1])
-        self.assertIn("log", self.dialogs.messages()[-1])
+        self.assertIn("The reset did not work: MySQL did not start with the reset file.", self.dialogs.messages()[-1])
         self.assertEqual(self.lampp_calls()[-1], ["startmysql"])
         self.assertTrue(self.running)
         self.assertEqual(self.admin.root_password, "forgotten 1")
         self.assert_cleaned_up()
 
-    def test_new_password_not_taking_effect_is_reported(self):
-        self.server(honour_init_file=False)
+    def test_a_failing_lampp_start_is_cleaned_up_too(self):
+        self.server()
+        app = self.app(True, NEW, NEW)
+        original = self.helper.lampp
+
+        def lampp(actions):
+            if actions == ["startmysql"] and "init-file=" in self.paths.my_cnf.read_text():
+                raise repair.HelperFailure("lampp startmysql failed")
+            original(actions)
+        self.helper.lampp = lampp
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("The reset did not work: lampp startmysql failed", self.dialogs.messages()[-1])
+        self.assertTrue(self.running)
+        self.assert_cleaned_up()
+
+    def test_a_failing_reset_file_write_is_cleaned_up_and_started_normally(self):
+        self.server()
+        app = self.app(True, NEW, NEW)
+        app.chown = mock.Mock(side_effect=PermissionError(1, "Operation not permitted"))
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("The reset did not work: [Errno 1] Operation not permitted", self.dialogs.messages()[-1])
+        self.assertEqual(self.lampp_calls(), [["stopmysql"], ["startmysql"]])  # never started with a file
+        self.assert_cleaned_up()
+
+    def test_mysql_that_does_not_stop_is_reported_before_any_file_exists(self):
+        self.server()
+        self.helper.lampp = lambda actions: self.helper.calls.append(("lampp", list(actions)))  # stop does nothing
         app = self.app(True, NEW, NEW)
         self.assertFalse(app._attempt(app.reset_root_password))
-        self.assertIn("new password does not work", self.dialogs.messages()[-1])
+        self.assertIn("MySQL did not stop", self.dialogs.messages()[-1])
+        self.assertEqual(self.lampp_calls(), [["stopmysql"]])
+        self.assert_cleaned_up()
+
+    def test_new_password_not_taking_effect_is_reported(self):
+        self.server(passwords=())
+        app = self.app(True, NEW, NEW)
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("MySQL started, but the new password does not work", self.dialogs.messages()[-1])
         self.assertEqual(self.pma("auth_type"), "config")
         self.assert_cleaned_up()
 
-    def test_missing_mysql_user_stops_before_touching_mysql(self):
-        self.server()
-        app = self.app(True, NEW, NEW)
-        app.mysql_account = mock.Mock(side_effect=KeyError("mysql"))
-        self.assertFalse(app._attempt(app.reset_root_password))
-        self.assertIn("'mysql'", self.dialogs.messages()[-1])
-        self.assertEqual(self.lampp_calls(), [])
-        self.assert_cleaned_up()
+    def test_a_failed_normal_restart_says_what_happened(self):
+        for start_fails, expected in ((False, "running this again is safe"),
+                                      (True, "The reset itself did not work either: MySQL did not start with")):
+            with self.subTest(start_fails=start_fails):
+                self.setUp()
+                self.server(start_fails=start_fails, normal_start_fails=True)
+                app = self.app(True, NEW, NEW)
+                self.assertFalse(app._attempt(app.reset_root_password))
+                message = self.dialogs.messages()[-1]
+                self.assertIn("MySQL could not be started normally again: MySQL did not start.", message)
+                self.assertIn(expected, message)
+                self.assert_cleaned_up()
 
-    def test_a_temp_folder_failure_still_starts_mysql_again(self):
+    def test_root_password_is_remembered_even_if_the_last_steps_fail(self):
         self.server()
-        self.reset_dir.rmdir()  # mkdtemp now fails
         app = self.app(True, NEW, NEW)
+        app.root_password = "forgotten 1"
+        original = self.admin.execute
+
+        def execute(sql, root_password):
+            if "DROP USER" in sql:
+                raise repair.MysqlError("ERROR 1064 boom")
+            return original(sql, root_password)
+        self.admin.execute = execute
         self.assertFalse(app._attempt(app.reset_root_password))
-        self.assertIn("did not work", self.dialogs.messages()[-1])
-        self.assertEqual(self.lampp_calls(), [["stopmysql"], ["startmysql"]])
-        self.assertTrue(self.running)
-        self.assertEqual(self.paths.my_cnf.read_text(), self.original_cnf)
+        self.assertEqual(app.root_password, NEW)
+
+    def test_my_cnf_that_cannot_be_cleaned_is_named_and_mysql_is_not_restarted(self):
+        self.server()
+        app = self.app(True, NEW, NEW)
+        writes = []
+        real_write = repair.fsutil.atomic_write
+
+        def atomic_write(path, text):
+            if path == self.paths.my_cnf and "init-file=" not in text:
+                raise OSError(28, "No space left on device")
+            writes.append(path)
+            real_write(path, text)
+        with mock.patch.object(repair.fsutil, "atomic_write", atomic_write):
+            self.assertFalse(app._attempt(app.reset_root_password))
+        message = self.dialogs.messages()[-1]
+        self.assertIn(str(self.paths.my_cnf), message)
+        self.assertIn("init-file=", message)
+        self.assertEqual(self.leftovers(), [])  # the reset file itself is gone first
+        self.assertEqual(self.lampp_calls(), [["stopmysql"], ["startmysql"]])  # no normal restart
 
     def test_cleanup_happens_even_when_the_program_is_killed_midway(self):
         self.server(exit_on_init_start=True)
@@ -538,10 +627,30 @@ class ResetRootPasswordTest(RepairCase):
             app.reset_root_password()
         self.assert_cleaned_up()
 
+    def test_a_reset_left_by_a_killed_run_is_removed_on_start(self):
+        self.server()
+        folder = self.paths.runtime / "reset-old"
+        folder.mkdir(parents=True)
+        (folder / "reset.sql").write_text("ALTER USER ...;\n")
+        self.paths.my_cnf.write_text(configedit.mysql_init_file(self.original_cnf, str(folder / "reset.sql")))
+        note = self.app().remove_stale_reset()
+        self.assertIn("Removed a root password reset left over", note)
+        self.assert_cleaned_up()
+        self.assertIsNone(self.app().remove_stale_reset())
+
+    def test_a_stale_line_pointing_elsewhere_keeps_that_file(self):
+        self.server()
+        elsewhere = self.paths.lampp / "mine.sql"
+        elsewhere.write_text("x")
+        self.paths.my_cnf.write_text(configedit.mysql_init_file(self.original_cnf, str(elsewhere)))
+        self.app().remove_stale_reset()
+        self.assertEqual(self.paths.my_cnf.read_text(), self.original_cnf)
+        self.assertTrue(elsewhere.exists())
+
     def test_wrong_current_password_points_to_the_reset(self):
         app = self.app("wrong one", None)
         self.assertFalse(app._attempt(app.change_root_password))
-        self.assertIn(health.FIX_RESET, self.dialogs.messages()[0])
+        self.assertIn(f"use “{health.FIX_RESET}” in sudo xampp-repair", self.dialogs.messages()[0])
 
     def test_is_in_the_menu(self):
         self.assertIn(health.FIX_RESET, [label for _, label, _ in self.app().menu_items()])

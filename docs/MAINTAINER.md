@@ -59,7 +59,7 @@ answers, not just until `mysqld` exists, and only "access denied" counts as "wro
 connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-242 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+250 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -168,6 +168,7 @@ Design rules:
 | `/usr/share/icons/hicolor/scalable/apps/io.github.shiron.XamppPanel.svg` | root, 0644 | App icon |
 | `/usr/share/icons/hicolor/scalable/status/xampp-panel-{running,stopped}.svg` | root, 0644 | Tray icons |
 | `/usr/local/bin/xampp-panel` | symlink | So `xampp-panel` works in a terminal |
+| `/run/xampp-panel/` | root, 0755 (tmpfs) | Created by `xampp-repair` when needed: holds a password reset's `reset-*/reset.sql` (`root:mysql`, 0710/0640, hash only) for the seconds a reset runs; gone at reboot |
 | `~/.config/xampp-panel/settings.json` | you, 0600 | Created when you change the tray option |
 
 ### Files it edits (all reversible, all backed up once)
@@ -183,7 +184,7 @@ Before the first change, each file gets a copy named `<file>.xampp-panel.bak`.
 | `/opt/lampp/etc/my.cnf` | `bind-address=127.0.0.1` added under `[mysqld]` | `# xampp-panel: localhost only` |
 | same | Active `skip-networking` commented out (for good: `harden off` does not restore it) | none; it becomes `#skip-networking` |
 | same | `!include` for lean mode (only if on) | `# BEGIN xampp-panel lean` |
-| same | `init-file=…` under `[mysqld]`, only **during** "Reset forgotten MySQL root password" (removed in a `finally`; the health check flags it if a reset was killed with `kill -9`) | `# xampp-panel: one-time root password reset (removed right after)` |
+| same | `init-file=…` under `[mysqld]`, only **during** "Reset forgotten MySQL root password" (removed in a `finally`; a leftover from a run killed with `kill -9` is removed when `xampp-repair` next starts) | `# xampp-panel: one-time root password reset (removed right after)` |
 | `/opt/lampp/etc/proftpd.conf` | `DefaultAddress 127.0.0.1` + `SocketBindTight on` | `# BEGIN xampp-panel localhost` |
 | same | `UserPassword daemon` replaced with a new hash (`xampp-repair` → "Fix FTP config" only, not `setup.sh`) | none; detected by `configedit.proftpd_password_broken` |
 | `/etc/hosts` | `127.0.0.1  <name>.local` for each site | `# BEGIN xampp-panel sites` |
@@ -388,7 +389,8 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `9ea8b88` | Review fixes for the download: pinned file wins over a name that sorts later, folder above the project no longer searched, failed copy ≠ wrong checksum, resumable download with stall timeout, private copy under `/root`, deletes as the user, whole decision in the tested `xampp_prepare` |
 | `63c0489` | Second review: only the pinned file is used automatically (other versions need `--installer`, a hint names them); curl `-q` and stdout to stderr; tests check what runs as the user and that the download really resumes |
 | `4cdecda` | Third review: the hint's `--installer` path is shell-quoted; `--help` says only the pinned version is checksummed; doc and test-comment precision |
-| this task | "Reset forgotten MySQL root password" (`repair.reset_root_password`, `configedit.mysql_init_file`, `mysqladmin.reset_root_sql`, health finding for a leftover line); a wrong current root password points to it |
+| `6c40e9e` | "Reset forgotten MySQL root password" (`repair.reset_root_password`, `configedit.mysql_init_file`, `mysqladmin.reset_root_sql`, health finding for a leftover line); a wrong current root password points to it |
+| this task | Review fixes for the reset: hash only in the file, `/run/xampp-panel` with `root:mysql` 0710/0640 and the group set via the open descriptor, folder removed first and signals blocked during cleanup, stale line removed on start, combined restart message, MySQL left as it was, `mysql` user checked first |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -414,25 +416,40 @@ Decisions made during the build (and what they cost if wrong):
   refusals that are not about the password (1040 too many connections, 1129 host blocked, 1130 host
   not allowed, 1862 password expired) as "the server answers"; `can_login` still raises those, so
   the caller shows MySQL's own message. `_ensure_mysql` polls `ping()` once a second until a
-  monotonic deadline of `MYSQL_START_SECONDS` (20 s) and does not sleep after the last poll.
+  monotonic deadline of `MYSQL_WAIT_SECONDS` (20 s) and does not sleep after the last poll.
 - **Timeouts:** probes (`can_login`, `ping`) pass `--connect-timeout=PROBE_TIMEOUT` (5 s) and are
   killed after `PROBE_TIMEOUT + 5` s; `execute` and `mysql_upgrade` get `TIMEOUT` (120 s), since
   real work can take long. A hanging probe therefore stretches the 20 s readiness wait by at most
   one probe (about 10 s), not by 120 s per round.
-- **Forgotten root password: `init-file`, not `--skip-grant-tables`.** `reset_root_password` writes
-  one `ALTER USER 'root'@'localhost' IDENTIFIED BY …` line (`mysqladmin.reset_root_sql`) into a
-  0600 file in a fresh 0700 `mkdtemp` folder, both `chown`ed to the `mysql` user that XAMPP's
-  `mysqld_safe` runs `mysqld` as (`MYSQL_USER`), adds `init-file=<that file>` under `[mysqld]`
-  (`configedit.mysql_init_file`, path restricted to `[A-Za-z0-9_./-]`), and starts MySQL with the
-  normal `lampp startmysql`. MariaDB runs the file once at startup **with password checks on**, so
-  unlike `--skip-grant-tables` nobody can connect without a password at any moment, and XAMPP's own
-  start command is reused instead of copied. A `finally` removes the `my.cnf` line and the folder
-  (SIGHUP/SIGTERM also go through it), then MySQL is restarted normally, the new password is
-  verified with a login, and `_set_root_password(new, new)` sets it on the other root accounts
-  (127.0.0.1, ::1), drops anonymous accounts and switches phpMyAdmin to its login page. Cost if
-  wrong: if MariaDB fails on the file, MySQL is started normally again and the user sees the error;
-  only `kill -9` midway can leave the line behind (the health check flags it, the reset replaces it).
-  Not verified against a real MariaDB here (no server in the sandbox).
+- **Forgotten root password: `init-file`, not `--skip-grant-tables`.** `reset_root_password`:
+  1. Checks the `mysql` user exists (`MYSQL_USER`, whom XAMPP's `mysqld_safe` runs `mysqld` as)
+     before asking anything else, then asks for the new password.
+  2. Writes **only the password's hash** (`ALTER USER 'root'@'localhost' IDENTIFIED BY PASSWORD
+     '*…'`, `mysqladmin.reset_root_sql` / `native_password_hash`) into `reset.sql` in a fresh
+     `mkdtemp` folder under `/run/xampp-panel` (tmpfs, `Paths.runtime`, refused unless it is a real
+     root-owned folder nobody else can write). Folder `root:mysql 0710`, file `root:mysql 0640`
+     (`O_EXCL|O_NOFOLLOW`, group set through the open descriptor): mysqld can read it, nobody but
+     root can swap or change it. The plaintext never touches disk because anything mysqld can read,
+     a MySQL account with the FILE privilege can read too (`LOAD_FILE(@@init_file)`).
+  3. Adds `init-file=<that file>` under `[mysqld]` (`configedit.mysql_init_file`, absolute path
+     restricted to `/[A-Za-z0-9_./-]+`) and starts MySQL with the normal `lampp startmysql`.
+     MariaDB runs the file once at startup **with password checks on**, so unlike
+     `--skip-grant-tables` nobody can connect without a password at any moment, and XAMPP's own
+     start command is reused instead of copied.
+  4. Cleans up in a `finally`, with SIGINT/SIGHUP/SIGTERM blocked meanwhile: the folder first, then
+     the `my.cnf` line. If that fails (e.g. disk full) it says exactly what to remove and does not
+     restart MySQL.
+  5. Restarts MySQL normally (one combined message if that fails, saying whether the reset itself
+     worked), verifies the new password with a login, remembers it, and runs
+     `_set_root_password(new, new)`: the real password over stdin on every root account (127.0.0.1,
+     ::1; same hash), anonymous accounts dropped, phpMyAdmin switched to its login page. MySQL is
+     stopped again if it was stopped before.
+
+  A run killed with `kill -9` can leave the `my.cnf` line (every start would run it again);
+  `xampp-repair` removes such a leftover (`remove_stale_reset`) every time it starts, and the folder
+  is in tmpfs anyway. Cost if wrong: if MariaDB fails on the file, MySQL is started normally again
+  and the user sees the error. Not verified against a real MariaDB here (no server in the sandbox);
+  see the manual check in the plan's Task 11.
 - **Esc on a yes/no question:** whiptail exits 255 on Esc; `Dialogs.yesno` raises `Cancelled` then,
   so Esc never counts as "No" (it used to turn localhost-only off in "Re-apply panel config").
 - **XAMPP download:** pinned to one version with a SHA-256 instead of "the newest", because the
@@ -604,7 +621,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 242 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 250 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 

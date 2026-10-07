@@ -4,6 +4,7 @@ Passwords never appear on a command line or in the environment: SQL goes in on
 stdin and credentials in a private option file that is deleted right after use.
 """
 
+import hashlib
 import os
 import re
 import subprocess
@@ -72,13 +73,18 @@ def set_root_password_sql(password: str) -> str:
             + "SET @pw = NULL, @accounts = NULL;\n")
 
 
+def native_password_hash(password: str) -> str:
+    """What MariaDB's PASSWORD() stores for mysql_native_password: '*' + HEX(SHA1(SHA1(utf-8 bytes)))."""
+    return "*" + hashlib.sha1(hashlib.sha1(password.encode("utf-8")).digest()).hexdigest().upper()
+
+
 def reset_root_sql(password: str) -> str:
     """For MariaDB's init-file, run once at startup with the grant tables on (unlike
-    --skip-grant-tables, MySQL is never open without a password). One statement per line.
-    Only root@localhost: the caller then sets the other root accounts with set_root_password_sql."""
-    if "\n" in password or "\r" in password:
-        raise ValueError("line breaks are not allowed in the password")
-    return _SQL_MODE + f"ALTER USER 'root'@'localhost' IDENTIFIED BY {sql_quote(password)};\n"
+    --skip-grant-tables, MySQL is never open without a password). It holds only the hash, so the
+    file never contains the password itself (mysqld's user, and any account with the FILE
+    privilege, can read it). Only root@localhost: the caller then sets the real password on every
+    root account over stdin (set_root_password_sql), which stores the same hash."""
+    return f"ALTER USER 'root'@'localhost' IDENTIFIED BY PASSWORD '{native_password_hash(password)}';\n"
 
 
 def pma_account_sql(user: str, password: str) -> str:
