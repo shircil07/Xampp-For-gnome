@@ -21,10 +21,11 @@ Usage: sudo ./setup.sh [options]
 Installs XAMPP (if /opt/lampp does not exist yet) and the XAMPP Panel app.
 
 Options:
-  --installer PATH  XAMPP installer to use, e.g. another version (default:
-                    XAMPP $XAMPP_VERSION from this folder or ~/Downloads,
-                    downloaded into ~/Downloads if it isn't there; its
-                    checksum is always checked)
+  --installer PATH  XAMPP installer to use, e.g. another version (only
+                    XAMPP $XAMPP_VERSION is checked against its checksum).
+                    Default: XAMPP $XAMPP_VERSION from this folder or
+                    ~/Downloads, downloaded into ~/Downloads if it isn't
+                    there.
   --allow-lan       let other devices on your network reach XAMPP
                     (default: only this computer can)
   --lean            turn on lean mode without asking

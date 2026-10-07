@@ -47,4 +47,4 @@ class ScriptsTest(unittest.TestCase):
 
     def test_help_names_the_pinned_version(self):
         proc = subprocess.run(["bash", str(ROOT / "setup.sh"), "--help"], capture_output=True, text=True)
-        self.assertIn("XAMPP 8.2.12 from this folder", proc.stdout)
+        self.assertIn("Default: XAMPP 8.2.12 from this folder", proc.stdout)

@@ -13,7 +13,8 @@ PINNED = "xampp-linux-x64-8.2.12-0-installer.run"
 
 # A curl stand-in that behaves like a resumed download: it logs its argv, continues $FAKE_PAYLOAD
 # from the --output file's current size, and while the counter file is positive it delivers only
-# one more byte and fails. So the result equals the payload only if every attempt resumed.
+# one more byte and fails. A retry that starts over while keeping the .part ends up with extra
+# bytes; the flag assertions check that --continue-at is actually passed.
 FAKE_CURL = """#!/bin/bash
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 out=""
@@ -139,7 +140,7 @@ class DownloadTest(LibTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(self.curl_calls()), 3)
         self.assertTrue(all("--continue-at -" in call for call in self.curl_calls()))
-        self.assertEqual(dest.read_bytes(), PAYLOAD)  # only true if each attempt resumed
+        self.assertEqual(dest.read_bytes(), PAYLOAD)  # no bytes duplicated across attempts
 
     def test_curl_output_never_reaches_stdout(self):
         noisy = self.bin / "curl"
@@ -230,6 +231,12 @@ class PrepareTest(LibTestCase):
         self.assertEqual(proc.stdout.strip(), str(self.work / PINNED))
         self.assertEqual(len(self.curl_calls()), 1)
         self.assertIn(f"--installer {other}", proc.stderr)
+
+    def test_the_hint_quotes_a_path_with_spaces(self):
+        spaced = self.tmp / "my downloads"
+        other = self.put(spaced, "xampp-linux-x64-8.1.25-0-installer.run", b"other")
+        proc = self.bash(f'xampp_prepare "{self.work}" "{spaced}" "" "{self.project}"')
+        self.assertIn("--installer " + str(other).replace(" ", "\\ "), proc.stderr)
 
     def test_installer_option_runs_another_version_unchecked_from_a_private_copy(self):
         other = self.put(self.tmp, "xampp-linux-x64-8.1.25-0-installer.run", b"other")

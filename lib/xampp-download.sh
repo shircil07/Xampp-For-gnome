@@ -91,7 +91,8 @@ xampp_prepare() {
     if ! installer=$(xampp_find_installer "$@" "$downloads"); then
       local other
       while IFS= read -r other; do
-        echo "Found $other, but it isn't XAMPP $XAMPP_VERSION. To install it instead: sudo ./setup.sh --installer $other" >&2
+        printf "Found %s, but it isn't XAMPP %s. To install it instead: sudo ./setup.sh --installer %q\n" \
+          "$other" "$XAMPP_VERSION" "$other" >&2
       done < <(xampp_other_installers "$@" "$downloads")
       echo "Downloading XAMPP $XAMPP_VERSION ($XAMPP_FILE) into $downloads…" >&2
       xampp_download "$downloads/$XAMPP_FILE" || return 1
