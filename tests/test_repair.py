@@ -209,7 +209,6 @@ class FtpTest(RepairCase):
         self.assertEqual(self.paths.proftpd_conf.read_text(), before)
         self.assertIn("Fatal: bad config", self.dialogs.messages()[-1])
 
-
     def test_openssl_timeout_is_reported(self):
         self.run.answers["openssl"] = subprocess.TimeoutExpired(["openssl"], 30)
         before = self.paths.proftpd_conf.read_text()
