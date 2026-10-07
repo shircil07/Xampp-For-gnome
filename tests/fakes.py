@@ -49,11 +49,23 @@ class FakeAdmin:
         self.executed = []
         self.fail = None
         self.anonymous = ["''@'localhost'"]
+        self.connect_error = None  # set: the server does not answer (can_login raises, ping is False)
+        self.unready_pings = 0  # ping() answers False this many times first
+        self.pings = 0
 
     def can_login(self, user, password, database=None):
+        if self.connect_error:
+            raise MysqlError(self.connect_error)
         if user == "root":
             return password == self.root_password
         return self.pma_login
+
+    def ping(self):
+        self.pings += 1
+        if self.unready_pings:
+            self.unready_pings -= 1
+            return False
+        return not self.connect_error
 
     def execute(self, sql, root_password):
         if root_password != self.root_password:

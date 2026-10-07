@@ -102,7 +102,11 @@ class HealthCheck:
 
     def _mysql(self, root_password: str | None) -> list[Finding]:
         findings = []
-        if self.admin.can_login("root", ""):
+        try:
+            root_open = self.admin.can_login("root", "")
+        except MysqlError as e:  # still starting, or the socket is gone: no account check can run
+            return [Finding(False, f"MySQL: cannot connect: {e}")]
+        if root_open:
             findings.append(Finding(False, "MySQL root has no password", FIX_ROOT))
             root_password = ""
         else:
@@ -131,7 +135,11 @@ class HealthCheck:
             return Finding(False, "phpMyAdmin's control user is not set up", FIX_PMA)
         if pmaconfig.get_value(text, "pmadb") != PMADB:
             return Finding(False, f"phpMyAdmin's pmadb is not '{PMADB}'", FIX_PMA)
-        if not self.admin.can_login(user, password, PMADB):
+        try:
+            login = self.admin.can_login(user, password, PMADB)
+        except MysqlError as e:
+            return Finding(False, f"MySQL: cannot connect: {e}")
+        if not login:
             return Finding(False, f"phpMyAdmin's control user '{user}' cannot log in", FIX_PMA)
         return Finding(True, f"phpMyAdmin's control user '{user}' can log in")
 

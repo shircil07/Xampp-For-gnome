@@ -105,7 +105,30 @@ class MysqlAdminTest(unittest.TestCase):
         self.assertTrue(mysqladmin.MysqlAdmin(self.paths, ok).can_login("pma", "pw", "phpmyadmin"))
         self.assertEqual(ok.calls[0]["argv"][-1], "phpmyadmin")
         self.assertIn('user="pma"', ok.calls[0]["options"])
-        self.assertFalse(mysqladmin.MysqlAdmin(self.paths, RecordingRun(returncode=1)).can_login("pma", "pw"))
+
+    def test_can_login_is_false_when_access_is_denied(self):
+        for stderr in ("ERROR 1045 (28000): Access denied for user 'pma'@'localhost' (using password: YES)\n",
+                       "ERROR 1698 (28000): Access denied for user 'root'@'localhost'\n",
+                       "ERROR 1044 (42000): Access denied for user 'pma'@'localhost' to database 'phpmyadmin'\n",
+                       "ERROR 1049 (42000): Unknown database 'phpmyadmin'\n"):
+            with self.subTest(stderr=stderr):
+                run = RecordingRun(returncode=1, stderr=stderr)
+                self.assertFalse(mysqladmin.MysqlAdmin(self.paths, run).can_login("pma", "pw", "phpmyadmin"))
+
+    def test_can_login_raises_when_it_cannot_connect(self):
+        run = RecordingRun(returncode=1, stderr="ERROR 2002 (HY000): Can't connect to local server through "
+                                                "socket '/opt/lampp/var/mysql/mysql.sock' (2)\n")
+        with self.assertRaises(mysqladmin.MysqlError) as cm:
+            mysqladmin.MysqlAdmin(self.paths, run).can_login("root", "")
+        self.assertNotIsInstance(cm.exception, mysqladmin.AccessDenied)
+        self.assertIn("Can't connect", str(cm.exception))
+
+    def test_ping_is_true_once_the_server_answers(self):
+        self.assertTrue(mysqladmin.MysqlAdmin(self.paths, RecordingRun()).ping())
+        denied = RecordingRun(returncode=1, stderr="ERROR 1045 (28000): Access denied for user 'root'@'localhost'\n")
+        self.assertTrue(mysqladmin.MysqlAdmin(self.paths, denied).ping())
+        down = RecordingRun(returncode=1, stderr="ERROR 2002 (HY000): Can't connect to local server (2)\n")
+        self.assertFalse(mysqladmin.MysqlAdmin(self.paths, down).ping())
 
     def test_anonymous_accounts(self):
         run = RecordingRun(stdout="''@'localhost'\n''@'zbook'\n")

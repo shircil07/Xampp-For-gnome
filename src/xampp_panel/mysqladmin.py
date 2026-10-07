@@ -5,6 +5,7 @@ stdin and credentials in a private option file that is deleted right after use.
 """
 
 import os
+import re
 import subprocess
 import tempfile
 
@@ -20,10 +21,17 @@ TIMEOUT = 120  # seconds
 # Escaped backslashes only mean the same in every sql_mode once NO_BACKSLASH_ESCAPES is off.
 _SQL_MODE = "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '');\n"
 _LONG_LISTS = "SET SESSION group_concat_max_len = 65536;\n"
+# The server answered and refused: 1044 no access to the database, 1045 wrong password,
+# 1049 no such database, 1698 a password is needed. Anything else (e.g. 2002) means it did not answer.
+_REFUSED = re.compile(r"^ERROR (1044|1045|1049|1698)\b", re.M)
 
 
 class MysqlError(Exception):
     pass
+
+
+class AccessDenied(MysqlError):
+    """MySQL answered but refused the login, as opposed to not answering at all."""
 
 
 def sql_quote(value: str) -> str:
@@ -95,7 +103,8 @@ class MysqlAdmin:
             os.unlink(option_file)
         if proc.returncode != 0:
             lines = [line for line in (proc.stderr or proc.stdout or "").splitlines() if line.strip()]
-            raise MysqlError(lines[-1].strip() if lines else f"{name} failed")
+            error = AccessDenied if _REFUSED.search(proc.stderr or "") else MysqlError
+            raise error(lines[-1].strip() if lines else f"{name} failed")
         return proc.stdout
 
     def execute(self, sql: str, root_password: str) -> str:
@@ -105,6 +114,14 @@ class MysqlAdmin:
         args = ["--batch", "--skip-column-names"] + ([database] if database else [])
         try:
             self._client(self.paths.mysql_client, user, password, args, "SELECT 1;\n")
+        except AccessDenied:
+            return False
+        return True
+
+    def ping(self) -> bool:
+        """True once the server answers, even if it refuses an empty root password."""
+        try:
+            self.can_login("root", "")
         except MysqlError:
             return False
         return True

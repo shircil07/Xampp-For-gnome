@@ -85,6 +85,24 @@ class HealthCheckTest(HealthCase):
         self.assertIn(health.FIX_ROOT, [fix for _, fix in self.problems(findings)])
         self.assertFalse(any("not running" in f.text for f in findings))
 
+    def test_mysql_not_answering_is_a_problem_not_a_root_password(self):
+        self.admin.connect_error = "ERROR 2002 (HY000): Can't connect to local server (2)"
+        findings = self.check()
+        texts = [text for text, _ in self.problems(findings)]
+        self.assertIn("MySQL: cannot connect: ERROR 2002 (HY000): Can't connect to local server (2)", texts)
+        self.assertFalse(any("root has a password" in f.text for f in findings))
+
+    def test_mysql_going_away_during_the_pma_check_is_a_problem(self):
+        root_login = self.admin.can_login
+
+        def can_login(user, password, database=None):
+            if user == "pma":
+                raise health.MysqlError("ERROR 2013 (HY000): Lost connection to server")
+            return root_login(user, password, database)
+        self.admin.can_login = can_login
+        texts = [text for text, _ in self.problems(self.check())]
+        self.assertIn("MySQL: cannot connect: ERROR 2013 (HY000): Lost connection to server", texts)
+
     def test_mysql_stopped_skips_account_checks(self):
         self.states["mysql"] = State.STOPPED
         self.admin.root_password = ""

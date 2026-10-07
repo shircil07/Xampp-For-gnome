@@ -17,6 +17,7 @@ PMA_XAMPP = ("<?php\n$i = 0;\n$i++;\n$cfg['Servers'][$i]['auth_type'] = 'config'
              "#$cfg['Servers'][$i]['controlpass'] = '';\n")
 HASH = "$6$abcdefgh12345678$" + "B" * 86
 NEW = "new-pass 1"
+CONNECT = "ERROR 2002 (HY000): Can't connect to local server through socket 'mysql.sock' (2)"
 
 
 class RepairCase(unittest.TestCase):
@@ -103,6 +104,29 @@ class ChangeRootPasswordTest(RepairCase):
         with self.assertRaises(repair.RepairError), contextlib.redirect_stderr(io.StringIO()):
             app._ensure_mysql()
         self.assertEqual(self.helper.calls[0], ("lampp", ["startmysql"]))
+
+    def test_waits_until_mysql_answers(self):
+        self.admin.unready_pings = 3  # process up, server still starting
+        sleeps = []
+        app = self.app()
+        app.sleep = sleeps.append
+        self.assertFalse(app._ensure_mysql())
+        self.assertEqual(self.admin.pings, 4)
+        self.assertEqual(sleeps, [1, 1, 1])
+
+    def test_mysql_that_never_answers_is_an_error(self):
+        self.admin.connect_error = CONNECT
+        with self.assertRaisesRegex(repair.RepairError, "does not answer"):
+            self.app()._ensure_mysql()
+        self.assertEqual(self.admin.pings, repair.MYSQL_START_SECONDS)
+
+    def test_connection_error_is_shown_not_taken_as_a_wrong_password(self):
+        app = self.app()
+        app.admin.ping = lambda: True  # answered once, then went away
+        self.admin.connect_error = CONNECT
+        self.assertFalse(app._attempt(app.change_root_password))
+        self.assertIn("Can't connect", self.dialogs.messages()[-1])
+        self.assertEqual(self.dialogs.shown, [("msgbox", self.dialogs.messages()[-1])])  # no password prompt
 
 
 class PmaTest(RepairCase):
@@ -313,6 +337,24 @@ class FirstInstallTest(RepairCase):
         self.assertEqual(code, 1)  # pma was skipped
         self.assertEqual(len(self.passwordboxes()), 1)
         self.assertEqual(self.admin.executed, [])
+
+    def test_connection_error_is_not_taken_as_a_root_password(self):
+        self.admin.ping = lambda: True  # answered once, then went away
+        self.admin.connect_error = CONNECT
+        code, printed = self.first_install(self.app())
+        self.assertEqual(code, 1)
+        self.assertNotIn("already has a password", printed)
+        messages = self.dialogs.messages()
+        self.assertTrue(any(m.startswith("MySQL root password did not work") and "Can't connect" in m
+                            for m in messages), messages)
+        self.assertEqual(self.admin.executed, [])
+
+    def test_mysql_that_never_answers_stops_first_install(self):
+        self.admin.connect_error = CONNECT
+        code, printed = self.first_install(self.app())
+        self.assertEqual(code, 1)
+        self.assertIn("does not answer", printed)
+        self.assertNotIn("already has a password", printed)
 
     def test_failed_step_returns_1_and_names_the_fix(self):
         self.admin.fail = "ERROR 2002"

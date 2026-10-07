@@ -87,16 +87,20 @@ class RepairApp:
 
     # -- shared steps -----------------------------------------------------
     def _ensure_mysql(self) -> bool:
-        """Start MySQL if needed. Returns True if this call started it."""
-        if self.mysql_running():
-            return False
-        print("Starting MySQL (it is needed for this)…", file=sys.stderr)
-        self.helper.lampp(["startmysql"])
+        """Start MySQL if needed and wait until it answers. Returns True if this call started it."""
+        started = False
+        if not self.mysql_running():
+            print("Starting MySQL (it is needed for this)…", file=sys.stderr)
+            self.helper.lampp(["startmysql"])
+            started = True
+        # mysqld shows up before it accepts connections; until then every login would fail.
         for _ in range(MYSQL_START_SECONDS):
-            if self.mysql_running():
-                return True
+            if self.mysql_running() and self.admin.ping():
+                return started
             self.sleep(1)
-        raise RepairError("MySQL did not start. Check its log in the panel.")
+        if started:
+            raise RepairError("MySQL did not start. Check its log in the panel.")
+        raise RepairError("MySQL is running but does not answer. Check its log in the panel.")
 
     def _root(self) -> str:
         """The current root password, asked once per session ("" if root has none)."""
