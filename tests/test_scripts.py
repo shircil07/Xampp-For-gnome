@@ -35,3 +35,10 @@ class ScriptsTest(unittest.TestCase):
         self.assertIn("whiptail", text)
         self.assertIn('"$SRC_DIR/bin/xampp-repair"', text)
         self.assertIn("/usr/local/bin/xampp-repair", text)
+
+    def test_setup_downloads_and_verifies_the_installer(self):
+        text = (ROOT / "setup.sh").read_text()
+        self.assertIn('source "$SRC_DIR/lib/xampp-download.sh"', text)
+        self.assertIn("xampp_download ", text)
+        self.assertIn("xampp_verified_copy ", text)
+        self.assertRegex(text, r"packages=\([^)]*\bcurl\b[^)]*\bca-certificates\b")

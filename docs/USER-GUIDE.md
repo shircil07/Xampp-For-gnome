@@ -20,7 +20,8 @@ sudo ./setup.sh
 The script:
 
 - installs what's missing
-- installs XAMPP from `~/Downloads` if it isn't installed yet
+- installs XAMPP if it isn't installed yet: from an installer in `~/Downloads`, or it downloads XAMPP 8.2.12
+  (about 150 MB) there first and checks it isn't damaged
 - makes XAMPP reachable **only from this computer**
 - adds **XAMPP Control Panel** to your app menu
 
@@ -43,7 +44,7 @@ Options (`./setup.sh --help`):
 |---|---|
 | `--allow-lan` | Let phones and other computers on your Wi-Fi open your sites (off by default for safety) |
 | `--lean` / `--no-lean` | Answer the lean-mode question in advance |
-| `--installer PATH` | Use a specific XAMPP installer file |
+| `--installer PATH` | Use a specific XAMPP installer file instead of finding or downloading one |
 
 ---
 

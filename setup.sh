@@ -20,7 +20,8 @@ Installs XAMPP (if /opt/lampp does not exist yet) and the XAMPP Panel app.
 
 Options:
   --installer PATH  XAMPP installer to use (default: look next to this
-                    folder and in ~/Downloads)
+                    folder and in ~/Downloads; if none is there, download
+                    XAMPP 8.2.12 into ~/Downloads and check its checksum)
   --allow-lan       let other devices on your network reach XAMPP
                     (default: only this computer can)
   --lean            turn on lean mode without asking
@@ -43,6 +44,8 @@ done
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+# shellcheck source=lib/xampp-download.sh
+source "$SRC_DIR/lib/xampp-download.sh"
 ask() { local reply=""; read -r -p "$1 [y/N] " reply </dev/tty || true; [[ $reply =~ ^[Yy] ]]; }
 
 [[ $EUID -eq 0 ]] || die "run this with: sudo ./setup.sh"
@@ -54,7 +57,7 @@ REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 apt-cache show gir1.2-adw-1 >/dev/null 2>&1 || die "libadwaita is not available: XAMPP Panel needs Zorin OS 17 / Ubuntu 22.04 or newer."
 
 say "Installing required packages"
-packages=(libcrypt1 net-tools acl whiptail python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1)
+packages=(curl ca-certificates libcrypt1 net-tools acl whiptail python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1)
 if apt-cache show pkexec >/dev/null 2>&1; then packages+=(pkexec); else packages+=(policykit-1); fi
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${packages[@]}"
@@ -70,10 +73,33 @@ else
       INSTALLER="$candidate"
     done
   fi
-  [[ -n $INSTALLER && -f $INSTALLER ]] || die "XAMPP installer not found. Use: sudo ./setup.sh --installer /path/to/xampp-linux-x64-…-installer.run"
+  auto="$REAL_HOME/Downloads/$XAMPP_FILE"
+  if [[ -z $INSTALLER ]]; then
+    echo "No XAMPP installer found. Downloading $XAMPP_FILE (about 150 MB) into ~/Downloads…"
+    xampp_download "$auto" || die "the download failed. Check your internet connection and run setup.sh again, or download XAMPP from https://www.apachefriends.org yourself and use: sudo ./setup.sh --installer /path/to/the-installer.run"
+    INSTALLER="$auto"
+  fi
+  [[ -f $INSTALLER ]] || die "XAMPP installer not found: $INSTALLER"
+  # The installer runs as root, so it runs from a private copy, never from the user's folder.
+  workdir="$(mktemp -d)"
+  trap 'rm -rf -- "$workdir"' EXIT
+  if [[ $(basename "$INSTALLER") == "$XAMPP_FILE" ]]; then
+    if ! run="$(xampp_verified_copy "$INSTALLER" "$workdir")"; then
+      if [[ $INSTALLER == "$auto" ]]; then
+        rm -f -- "$INSTALLER"
+        die "$INSTALLER was damaged or incomplete (wrong checksum) and has been deleted. Run setup.sh again to download it again."
+      fi
+      die "$INSTALLER does not match the official XAMPP $XAMPP_FILE (wrong checksum). Download it again."
+    fi
+    echo "Checksum OK."
+  else
+    run="$workdir/$(basename "$INSTALLER")"
+    install -m 0700 -- "$INSTALLER" "$run"
+  fi
   echo "Installing $(basename "$INSTALLER"). This takes a minute…"
-  chmod +x "$INSTALLER"
-  "$INSTALLER" --mode unattended --unattendedmodeui none
+  "$run" --mode unattended --unattendedmodeui none
+  rm -rf -- "$workdir"
+  trap - EXIT
   [[ -x $LAMPP/lampp ]] || die "the XAMPP installer finished but $LAMPP/lampp is missing."
 fi
 
