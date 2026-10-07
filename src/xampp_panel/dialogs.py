@@ -7,6 +7,10 @@ import tempfile
 TITLE = "XAMPP repair & configure"
 
 
+class Cancelled(Exception):
+    """The user chose Cancel or pressed Esc."""
+
+
 class Dialogs:
     def __init__(self, run=subprocess.run, height: int = 20, width: int = 74):
         self.run = run
@@ -24,7 +28,11 @@ class Dialogs:
         return self._answer("--menu", text, *self.size, str(len(items)), *flat)
 
     def yesno(self, text: str) -> bool:
-        return self._show("--yesno", text, *self.size).returncode == 0
+        """Yes = True, No = False; Esc raises Cancelled so it never counts as an answer."""
+        code = self._show("--yesno", text, *self.size).returncode
+        if code == 255:
+            raise Cancelled()
+        return code == 0
 
     def msgbox(self, text: str) -> None:
         self._show("--scrolltext", "--msgbox", text, *self.size)

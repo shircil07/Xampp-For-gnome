@@ -186,6 +186,12 @@ class PmaTest(RepairCase):
         self.assertEqual(self.dialogs.messages(), [])
         self.assertIn("s3cret", self.dialogs.secrets()[0])
 
+    def test_show_password_escape_shows_nothing(self):
+        self.paths.phpmyadmin_conf.write_text(pmaconfig.set_value(PMA_XAMPP, "controlpass", "s3cret"))
+        app = self.app(None)
+        self.assertFalse(app._attempt(app.show_pma_password))
+        self.assertEqual(self.dialogs.secrets(), [])
+
 
 class FtpTest(RepairCase):
     def test_replaces_broken_block_with_hash(self):
@@ -236,6 +242,18 @@ class OtherActionsTest(RepairCase):
     def test_reapply_asks_and_applies(self):
         self.app(True, False).reapply()
         self.assertEqual(self.helper.calls, [("integrate", True), ("harden", True), ("lean", False), ("apply", [])])
+
+    def test_reapply_escape_on_either_question_changes_nothing(self):
+        for answers in ((None,), (True, None), (False, None)):
+            with self.subTest(answers=answers):
+                app = self.app(*answers)
+                self.assertFalse(app._attempt(app.reapply))
+                self.assertEqual(self.helper.calls, [])
+                self.assertEqual(self.dialogs.messages(), [])
+
+    def test_reapply_no_means_no(self):
+        self.app(False, False).reapply()
+        self.assertEqual(self.helper.calls, [("integrate", True), ("harden", False), ("lean", False), ("apply", [])])
 
     def test_health_check_shows_report(self):
         app = self.app()

@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from xampp_panel.dialogs import Cancelled
 from xampp_panel.mysqladmin import MysqlError
 
 
@@ -22,7 +23,10 @@ class FakeDialogs:
         return self._next("menu", text)
 
     def yesno(self, text):
-        return self._next("yesno", text)
+        answer = self._next("yesno", text)
+        if answer is None:  # Esc
+            raise Cancelled()
+        return answer
 
     def passwordbox(self, text):
         return self._next("passwordbox", text)

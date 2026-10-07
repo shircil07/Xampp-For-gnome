@@ -14,7 +14,7 @@ import sys
 import time
 
 from . import configedit, fsutil, health, pmaconfig, services, sites
-from .dialogs import Dialogs
+from .dialogs import Cancelled, Dialogs
 from .helper import SAFE_ENV, Helper, HelperFailure
 from .mysqladmin import (PMA_USER, PMADB, MysqlAdmin, MysqlError, drop_anonymous_sql, password_problem,
                          pma_account_sql, set_root_password_sql)
@@ -29,10 +29,6 @@ _PMA_USER_NAME = re.compile(r"[A-Za-z0-9_]{1,32}")
 
 
 class RepairError(Exception):
-    pass
-
-
-class Cancelled(Exception):
     pass
 
 

@@ -3,7 +3,7 @@ import stat
 import subprocess
 import unittest
 
-from xampp_panel.dialogs import Dialogs
+from xampp_panel.dialogs import Cancelled, Dialogs
 
 
 class Run:
@@ -35,6 +35,10 @@ class DialogsTest(unittest.TestCase):
     def test_yesno(self):
         self.assertTrue(Dialogs(Run(0)).yesno("Sure?"))
         self.assertFalse(Dialogs(Run(1)).yesno("Sure?"))
+
+    def test_yesno_escape_cancels(self):
+        with self.assertRaises(Cancelled):
+            Dialogs(Run(255)).yesno("Sure?")
 
     def test_msgbox_scrolls(self):
         run = Run()
