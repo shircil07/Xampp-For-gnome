@@ -20,8 +20,10 @@ sudo ./setup.sh
 The script:
 
 - installs what's missing
-- installs XAMPP if it isn't installed yet: from an installer in `~/Downloads`, or it downloads XAMPP 8.2.12
-  (about 150 MB) there first and checks it isn't damaged
+- installs XAMPP if it isn't installed yet, from an installer in the project folder or `~/Downloads`. If there
+  is none, it downloads XAMPP 8.2.12 into `~/Downloads` first (a progress bar shows the size) and checks it
+  isn't damaged. A dropped connection picks up where it stopped. Behind a proxy, download the installer
+  yourself and use `--installer`, because `sudo` drops proxy settings.
 - makes XAMPP reachable **only from this computer**
 - adds **XAMPP Control Panel** to your app menu
 

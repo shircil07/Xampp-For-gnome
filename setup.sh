@@ -7,21 +7,23 @@ APP_DIR=/opt/xampp-panel
 LAMPP=/opt/lampp
 APP_ID=io.github.shiron.XamppPanel
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/xampp-download.sh
+source "$SRC_DIR/lib/xampp-download.sh"
 
 ALLOW_LAN=0
 LEAN=ask
 INSTALLER=""
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: sudo ./setup.sh [options]
 
 Installs XAMPP (if /opt/lampp does not exist yet) and the XAMPP Panel app.
 
 Options:
-  --installer PATH  XAMPP installer to use (default: look next to this
-                    folder and in ~/Downloads; if none is there, download
-                    XAMPP 8.2.12 into ~/Downloads and check its checksum)
+  --installer PATH  XAMPP installer to use (default: look in this folder
+                    and in ~/Downloads; if none is there, download XAMPP
+                    $XAMPP_VERSION into ~/Downloads and check its checksum)
   --allow-lan       let other devices on your network reach XAMPP
                     (default: only this computer can)
   --lean            turn on lean mode without asking
@@ -44,8 +46,6 @@ done
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
-# shellcheck source=lib/xampp-download.sh
-source "$SRC_DIR/lib/xampp-download.sh"
 ask() { local reply=""; read -r -p "$1 [y/N] " reply </dev/tty || true; [[ $reply =~ ^[Yy] ]]; }
 
 [[ $EUID -eq 0 ]] || die "run this with: sudo ./setup.sh"
@@ -66,39 +66,14 @@ say "Checking XAMPP"
 if [[ -x $LAMPP/lampp ]]; then
   echo "XAMPP is already installed in $LAMPP."
 else
-  if [[ -z $INSTALLER ]]; then
-    for candidate in "$SRC_DIR"/xampp-linux-x64-*-installer.run \
-                     "$SRC_DIR"/../xampp-linux-x64-*-installer.run \
-                     "$REAL_HOME"/Downloads/xampp-linux-x64-*-installer.run; do
-      INSTALLER="$candidate"
-    done
-  fi
-  auto="$REAL_HOME/Downloads/$XAMPP_FILE"
-  if [[ -z $INSTALLER ]]; then
-    echo "No XAMPP installer found. Downloading $XAMPP_FILE (about 150 MB) into ~/Downloads…"
-    xampp_download "$auto" || die "the download failed. Check your internet connection and run setup.sh again, or download XAMPP from https://www.apachefriends.org yourself and use: sudo ./setup.sh --installer /path/to/the-installer.run"
-    INSTALLER="$auto"
-  fi
-  [[ -f $INSTALLER ]] || die "XAMPP installer not found: $INSTALLER"
-  # The installer runs as root, so it runs from a private copy, never from the user's folder.
-  workdir="$(mktemp -d)"
+  # The installer runs as root, so it runs from a private copy in a root-only folder (not /tmp,
+  # which may be noexec), never from the user's folder.
+  workdir="$(mktemp -d -p /root xampp-setup.XXXXXX)"
   trap 'rm -rf -- "$workdir"' EXIT
-  if [[ $(basename "$INSTALLER") == "$XAMPP_FILE" ]]; then
-    if ! run="$(xampp_verified_copy "$INSTALLER" "$workdir")"; then
-      if [[ $INSTALLER == "$auto" ]]; then
-        rm -f -- "$INSTALLER"
-        die "$INSTALLER was damaged or incomplete (wrong checksum) and has been deleted. Run setup.sh again to download it again."
-      fi
-      die "$INSTALLER does not match the official XAMPP $XAMPP_FILE (wrong checksum). Download it again."
-    fi
-    echo "Checksum OK."
-  else
-    run="$workdir/$(basename "$INSTALLER")"
-    install -m 0700 -- "$INSTALLER" "$run"
-  fi
-  echo "Installing $(basename "$INSTALLER"). This takes a minute…"
+  run="$(xampp_prepare "$workdir" "$REAL_HOME/Downloads" "$INSTALLER" "$SRC_DIR")" || exit 1
+  echo "Installing $(basename -- "$run"). This takes a minute…"
   "$run" --mode unattended --unattendedmodeui none
-  rm -rf -- "$workdir"
+  rm -rf -- "$workdir"   # don't keep a 150 MB copy around for the rest of setup
   trap - EXIT
   [[ -x $LAMPP/lampp ]] || die "the XAMPP installer finished but $LAMPP/lampp is missing."
 fi

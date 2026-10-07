@@ -59,7 +59,7 @@ answers, not just until `mysqld` exists, and only "access denied" counts as "wro
 connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-205 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+223 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -143,7 +143,7 @@ Design rules:
 | `src/xampp_panel/health.py` | `HealthCheck`: read-only report (services, configs, MySQL accounts, phpMyAdmin login, sites) with the menu item that fixes each problem |
 | `src/xampp_panel/repair.py` | `RepairApp`: the `xampp-repair` menu, its flows, and `first-install`; `main()` |
 | `src/xampp_panel/terminal.py` | Picks a terminal emulator and builds its argv for "Repair & configure…" (pure, no GTK) |
-| `lib/xampp-download.sh` | Sourced by `setup.sh`: the pinned XAMPP version (file name, URL, SHA-256), `xampp_download` (as the user, HTTPS only, `.part` file) and `xampp_verified_copy` (private copy, checksum checked on the copy) |
+| `lib/xampp-download.sh` | Sourced by `setup.sh`: the pinned XAMPP version (`XAMPP_VERSION`, `XAMPP_SHA256`; file name and URL derive from the version) and `xampp_prepare`, which `setup.sh` calls once: `xampp_find_installer` (pinned file first, else highest version, strict name pattern), `xampp_download` (as the user, HTTPS only, resumable `.part`, retries, stall timeout), `xampp_verified_copy` (private copy, checksum checked on the copy; exit 1 = wrong checksum, 2 = copy failed) |
 | `bin/xampp-panel`, `bin/xampp-helper`, `bin/xampp-repair` | Installed launchers (`#!/usr/bin/python3 -I`) |
 | `data/` | `.desktop` file, polkit policy, SVG icons |
 | `tests/` | stdlib `unittest` suite |
@@ -260,7 +260,7 @@ pkexec /opt/xampp-panel/bin/xampp-helper site-add demo "$HOME/Sites/demo"; echo 
 | Pointing a site at a system folder, or at a symlink to one | Path checks (above). ACLs are applied **as the user**, so even a swapped symlink can't give Apache access to files the user can't already grant. |
 | Injecting Apache config through a site name or path | Strict name regex; quotes, `$`, backslash, wildcards and newlines are banned in paths |
 | Anyone using the password prompt remotely | polkit policy: `allow_active = auth_admin_keep`; inactive and remote sessions are denied |
-| A damaged or swapped XAMPP installer run as root by `setup.sh` | The pinned installer is copied into a root-only temp folder and its SHA-256 is checked **on that copy**, which is what runs. The download itself runs as the user (`runuser`), HTTPS only, also on redirects. A pinned file with a wrong checksum stops the install (and is deleted if it is setup's own download in `~/Downloads`). Installers with other names (`--installer`, older versions) are used unchecked, as before. |
+| A damaged, swapped or planted XAMPP installer run as root by `setup.sh` | Installers are only picked up from the project folder and `~/Downloads` (not the folder above the project, which may be shared, e.g. `/tmp`), and only with a strict `xampp-linux-x64-<version>-<n>-installer.run` name. The pinned file always wins over other versions. Whatever runs is first copied into a root-only folder under `/root` (`mktemp -d -p /root`, so not `$TMPDIR` and not a noexec `/tmp`); for the pinned version the SHA-256 is checked **on that copy**, which is what runs. Downloads and deletions in `~/Downloads` run as the user (`runuser`); curl is HTTPS-only, also on redirects, TLS 1.2+. A pinned file with a wrong checksum stops the install; it is deleted only if `setup.sh` downloaded it in this run. Installers with other names (found, or given with `--installer`) are used unchecked: they are the user's explicit choice. |
 | A broken config taking Apache down | `apachectl -t` runs before every site change; on failure the previous vhost file is restored |
 
 **Accepted limitation:** every site's PHP runs as `daemon` and can read anything `daemon` can read,
@@ -383,7 +383,8 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `b927dd7` | Fix wave 3: login probes (`can_login`, `ping`) use `--connect-timeout=5` and a 10 s limit instead of 120 s; `_ensure_mysql` waits on a monotonic deadline (injected `clock`), not a count of rounds |
 | `9fc18fa` | Fix wave 3: `ping()` also counts errors 1040/1129/1130/1862 as "the server answers"; `can_login` still raises them |
 | `0b6ed50` | Docs for fix wave 3 (USER-GUIDE: "Run mysql_upgrade" acts without a question) |
-| this task | `setup.sh` downloads XAMPP 8.2.12 when no installer is found (`lib/xampp-download.sh`), checks its SHA-256 and runs a private copy |
+| `2d904ca` | `setup.sh` downloads XAMPP 8.2.12 when no installer is found (`lib/xampp-download.sh`), checks its SHA-256 and runs a private copy |
+| this task | Review fixes for the download: pinned file wins over a name that sorts later, folder above the project no longer searched, failed copy ≠ wrong checksum, resumable download with stall timeout, private copy under `/root`, deletes as the user, whole decision in the tested `xampp_prepare` |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -418,8 +419,13 @@ Decisions made during the build (and what they cost if wrong):
   so Esc never counts as "No" (it used to turn localhost-only off in "Re-apply panel config").
 - **XAMPP download:** pinned to one version with a SHA-256 instead of "the newest", because the
   installer runs as root and Apache Friends publishes only MD5/SHA-1. The SHA-256 was taken from a
-  download that matched the published MD5 and SHA-1. Cost if wrong: a newer XAMPP needs the three
+  download that matched the published MD5 and SHA-1. Cost if wrong: a newer XAMPP needs the two
   values in `lib/xampp-download.sh` bumped by hand (see §12).
+- **XAMPP download resumes:** curl runs with `--continue-at -` in a loop of `XAMPP_ATTEMPTS` (not
+  `--retry`, which would restart from byte 0), and `--speed-limit 1 --speed-time 60` so a stalled
+  connection fails into the next attempt instead of hanging. A `.part` left by Ctrl-C is resumed by
+  the next run; after the last failed attempt it is deleted, so a corrupt `.part` can't stick. The
+  checksum guards the result either way.
 - **Minimum platform:** GTK 4.6 / libadwaita 1.1 / GLib 2.72. Newer widgets (`Adw.Banner`, `Gtk.FileDialog`) are used only when available.
 
 ---
@@ -440,7 +446,7 @@ Decisions made during the build (and what they cost if wrong):
 | MySQL stuck "starting…", log says `port: 0` (`skip-networking` active) | `sudo xampp-repair` → "Turn MySQL networking back on" |
 | FTP won't start: `unknown configuration directive 'function'` | `sudo xampp-repair` → "Fix FTP config" |
 | Starting `xampp-panel` from SSH/remote terminal fails with "Gtk couldn't be initialized" | Normal: there's no display. Open it from the app menu. Errors are then in `journalctl --user` |
-| `shellcheck` was never run on the scripts | `shellcheck setup.sh uninstall.sh` |
+| `shellcheck` was never run on the scripts | `shellcheck -x setup.sh uninstall.sh lib/xampp-download.sh` |
 
 ---
 
@@ -547,15 +553,17 @@ change it in `src/xampp_panel/paths.py`. That's the only place paths live.
 ### Changing the XAMPP version `setup.sh` downloads
 
 `setup.sh` downloads only when `/opt/lampp` is missing and no installer is found. The version is
-pinned in `lib/xampp-download.sh` (`XAMPP_FILE`, `XAMPP_URL`, `XAMPP_SHA256`). To move to a new one:
+pinned in `lib/xampp-download.sh` (`XAMPP_VERSION`, `XAMPP_SHA256`; `XAMPP_FILE` and `XAMPP_URL`
+are built from the version). To move to a new one:
 
 1. Download the new installer from https://www.apachefriends.org/download.html.
 2. Compare `md5sum` / `sha1sum` of the file with the values the download page shows
    (hover "md5" / "sha1" next to the Linux download). Apache Friends publishes no SHA-256.
-3. Put the new file name, its `downloads.sourceforge.net/project/xampp/XAMPP%20Linux/<version>/…`
-   URL and its `sha256sum` into `lib/xampp-download.sh`, and update the version in the `--help`
-   text, README and USER-GUIDE.
-4. Run the suite (`tests/test_xampp_download.py` checks the values' format).
+3. Put the new version and the file's `sha256sum` into `lib/xampp-download.sh`. Check the file
+   name pattern (`-0-installer.run`) and the SourceForge folder still match the new release.
+   `--help` follows automatically; update the version in README, USER-GUIDE and
+   `tests/test_xampp_download.py` (`PINNED`, and the `--help` test in `tests/test_scripts.py`).
+4. Run the suite.
 
 Use the same version on machines whose databases you copy around: a raw MySQL data folder only
 works on the same MariaDB version.
@@ -576,7 +584,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 205 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 223 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 

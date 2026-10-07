@@ -39,6 +39,12 @@ class ScriptsTest(unittest.TestCase):
     def test_setup_downloads_and_verifies_the_installer(self):
         text = (ROOT / "setup.sh").read_text()
         self.assertIn('source "$SRC_DIR/lib/xampp-download.sh"', text)
-        self.assertIn("xampp_download ", text)
-        self.assertIn("xampp_verified_copy ", text)
+        # find → download → check → private copy all live in the tested lib/xampp-download.sh
+        self.assertRegex(text, r'(?m)^\s*run="\$\(xampp_prepare "\$workdir" "\$REAL_HOME/Downloads" "\$INSTALLER" "\$SRC_DIR"\)" \|\| exit 1$')
+        self.assertIn("mktemp -d -p /root", text)
+        self.assertNotIn("/../xampp-linux", text)
         self.assertRegex(text, r"packages=\([^)]*\bcurl\b[^)]*\bca-certificates\b")
+
+    def test_help_names_the_pinned_version(self):
+        proc = subprocess.run(["bash", str(ROOT / "setup.sh"), "--help"], capture_output=True, text=True)
+        self.assertIn("download XAMPP\n                    8.2.12", proc.stdout)
