@@ -130,6 +130,22 @@ class MysqlAdminTest(unittest.TestCase):
         down = RecordingRun(returncode=1, stderr="ERROR 2002 (HY000): Can't connect to local server (2)\n")
         self.assertFalse(mysqladmin.MysqlAdmin(self.paths, down).ping())
 
+    def test_ping_counts_other_refusals_as_answering(self):
+        for code in ("1040 (08004): Too many connections",
+                     "1129 (HY000): Host 'x' is blocked because of many connection errors",
+                     "1130 (HY000): Host 'x' is not allowed to connect to this MariaDB server",
+                     "1862 (HY000): Your password has expired"):
+            with self.subTest(code=code):
+                run = RecordingRun(returncode=1, stderr=f"ERROR {code}\n")
+                self.assertTrue(mysqladmin.MysqlAdmin(self.paths, run).ping())
+
+    def test_can_login_raises_for_refusals_that_are_not_a_wrong_password(self):
+        run = RecordingRun(returncode=1, stderr="ERROR 1040 (08004): Too many connections\n")
+        with self.assertRaises(mysqladmin.MysqlError) as cm:
+            mysqladmin.MysqlAdmin(self.paths, run).can_login("root", "")
+        self.assertNotIsInstance(cm.exception, mysqladmin.AccessDenied)
+        self.assertIn("Too many connections", str(cm.exception))
+
     def test_ping_is_false_on_timeout(self):
         def run(argv, **kwargs):
             raise subprocess.TimeoutExpired(argv, kwargs["timeout"])

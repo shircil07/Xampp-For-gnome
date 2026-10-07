@@ -26,6 +26,9 @@ _LONG_LISTS = "SET SESSION group_concat_max_len = 65536;\n"
 # The server answered and refused: 1044 no access to the database, 1045 wrong password,
 # 1049 no such database, 1698 a password is needed. Anything else (e.g. 2002) means it did not answer.
 _REFUSED = re.compile(r"^ERROR (1044|1045|1049|1698)\b", re.M)
+# The server answered but will not take this login for another reason (not a wrong password):
+# 1040 too many connections, 1129 host blocked, 1130 host not allowed, 1862 password expired.
+_ANSWERED = re.compile(r"^ERROR (1040|1129|1130|1862)\b")
 
 
 class MysqlError(Exception):
@@ -122,11 +125,11 @@ class MysqlAdmin:
         return True
 
     def ping(self) -> bool:
-        """True once the server answers, even if it refuses an empty root password."""
+        """True once the server answers, even if it refuses the login (empty root password or otherwise)."""
         try:
             self.can_login("root", "")
-        except MysqlError:
-            return False
+        except MysqlError as e:
+            return bool(_ANSWERED.match(str(e)))
         return True
 
     def anonymous_accounts(self, root_password: str) -> list[str]:
