@@ -4,6 +4,8 @@ Runs as root (sudo in a terminal the panel opens, or from setup.sh).
 `xampp-repair first-install` replaces XAMPP's "lampp security" during setup.
 """
 
+import contextlib
+import fcntl
 import os
 import pwd
 import re
@@ -28,6 +30,8 @@ PMA_PASSWORD_BYTES = 24  # secrets.token_urlsafe(24): 32 characters from [A-Za-z
 MYSQL_WAIT_SECONDS = 20  # how long MySQL may take to start (and answer) or to stop
 MYSQL_USER = "mysql"  # XAMPP's mysqld_safe runs mysqld as this user; its group may read the reset file
 RESET_FILE = "reset.sql"
+RESET_PREFIX = "reset-"
+LOCK_FILE = "repair.lock"
 _CLEANUP_SIGNALS = {signal.SIGINT, signal.SIGHUP, signal.SIGTERM}
 USAGE = "usage: sudo xampp-repair [first-install]"
 _FAILURES = (MysqlError, HelperFailure, OSError, ValueError, subprocess.SubprocessError)
@@ -204,24 +208,44 @@ class RepairApp:
         was_running = self.mysql_running()
         self._stop_mysql()
         error = folder = None
+        reset_done = False  # MySQL came up with the reset file: root@localhost has the new password
         try:
-            folder = Path(tempfile.mkdtemp(prefix="reset-", dir=runtime))
+            folder = Path(tempfile.mkdtemp(prefix=RESET_PREFIX, dir=runtime))
             self._start_with_reset_file(self._write_reset_file(folder, gid, reset_root_sql(new)))
+            reset_done = True
         except (RepairError, *_FAILURES) as e:
             error = e
         finally:
-            self._remove_reset(folder)
+            try:
+                self._remove_reset(folder)
+            except RepairError as cleanup:
+                outcome = ("The reset itself worked: root@localhost already has the new password." if reset_done
+                           else f"The reset itself did not work: {error}")
+                raise RepairError(f"{cleanup}\n\n{outcome}") from None
         self._restart_after_reset(error)
-        if error:
-            raise RepairError(f"The reset did not work: {error}\n\nMySQL was started normally again; "
-                              "its log in the panel may say why.")
-        if not self.admin.can_login("root", new):
-            raise RepairError("MySQL started, but the new password does not work. Check the MySQL log in the panel.")
-        self.root_password = new
-        self._set_root_password(new, new)  # the other root accounts, anonymous accounts, phpMyAdmin login
-        if not was_running:
-            self._stop_mysql()  # leave MySQL the way it was
-        self.dialogs.msgbox("Done. Log in to phpMyAdmin as 'root' with the new password.")
+        try:
+            if error:
+                raise RepairError(f"The reset did not work: {error}\n\nMySQL was started normally again; "
+                                  "its log in the panel may say why.")
+            if not self.admin.can_login("root", new):
+                raise RepairError("MySQL started, but the new password does not work. "
+                                  "Check the MySQL log in the panel.")
+            self.root_password = new
+            self._set_root_password(new, new)  # the other root accounts, anonymous accounts, phpMyAdmin login
+        except (RepairError, *_FAILURES) as e:
+            raise RepairError(f"{e}{self._leave_as_it_was(was_running)}") from None
+        self.dialogs.msgbox("Done. Log in to phpMyAdmin as 'root' with the new password."
+                            + self._leave_as_it_was(was_running))
+
+    def _leave_as_it_was(self, was_running: bool) -> str:
+        """Stops MySQL again if it was stopped before the reset. Returns a note if that failed."""
+        if was_running:
+            return ""
+        try:
+            self._stop_mysql()
+        except (RepairError, *_FAILURES) as e:
+            return f"\n\nMySQL could not be stopped again ({e}). Stop it from the panel."
+        return ""
 
     def _runtime_dir(self) -> Path:
         """paths.runtime (tmpfs), created if needed; refused unless it is a real, root-only-writable folder."""
@@ -263,10 +287,11 @@ class RepairApp:
             text = conf.read_text()
             if configedit.mysql_init_file_path(text) is not None:
                 self._write(conf, configedit.mysql_init_file(text, None))
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
+            leftover = f" and the folder {folder}" if folder else ""
             raise RepairError(f"Could not clean up after the reset: {e}\n\nRemove the line starting with "
-                              f"'init-file=' from {self.paths.my_cnf} and the folder {folder} "
-                              "before starting MySQL again.") from None
+                              f"'init-file=' from {self.paths.my_cnf}{leftover} "
+                              "before MySQL is next started.") from None
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
@@ -282,16 +307,27 @@ class RepairApp:
 
     def remove_stale_reset(self) -> str | None:
         """A reset killed with kill -9 leaves its my.cnf line (and maybe its folder): every MySQL start
-        would run it again. Removed when xampp-repair starts; returns a note if there was one."""
+        would run it again. Removed when xampp-repair starts; returns a note if there was one. Only a
+        <runtime>/reset-*/reset.sql folder is ever deleted; any other path only loses its line."""
         conf = self.paths.my_cnf
-        if not conf.exists():
-            return None
-        path = configedit.mysql_init_file_path(conf.read_text())
+        try:
+            if not conf.exists():
+                return None
+            path = configedit.mysql_init_file_path(conf.read_text())
+        except (OSError, UnicodeError) as e:
+            raise RepairError(f"Cannot read {conf}: {e}") from None
         if path is None:
             return None
-        folder = Path(path).parent
-        self._remove_reset(folder if folder.parent == self.paths.runtime and folder.exists() else None)
+        self._remove_reset(self._own_reset_folder(path))
         return f"Removed a root password reset left over from an interrupted run ({path})."
+
+    def _own_reset_folder(self, path: str) -> Path | None:
+        """The reset folder `path` names, if it is exactly one this tool makes and it still exists."""
+        file = Path(path)
+        if (not configedit.is_safe_init_path(path) or ".." in file.parts or file.name != RESET_FILE
+                or file.parent.parent != self.paths.runtime or not file.parent.name.startswith(RESET_PREFIX)):
+            return None
+        return file.parent if file.parent.is_dir() and not file.parent.is_symlink() else None
 
     def _set_root_password(self, current: str, new: str | None) -> None:
         """Drop anonymous accounts and set the root password; only then give phpMyAdmin a login page."""
@@ -456,6 +492,23 @@ def _exit(signum, frame):
     raise SystemExit(128 + signum)
 
 
+@contextlib.contextmanager
+def single_instance(runtime: Path):
+    """Yields True for the only running xampp-repair, False if another one holds the lock: a second
+    copy's start-up clean-up would otherwise remove a reset the first one is in the middle of."""
+    runtime.mkdir(mode=0o755, exist_ok=True)
+    fd = os.open(runtime / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
 def exit_on_signals() -> None:
     """Closing the terminal (SIGHUP) or a kill (SIGTERM) exits through Python, so `finally`
     blocks still delete the 0600 temp files that hold passwords."""
@@ -478,12 +531,16 @@ def main(argv=None) -> int:
     exit_on_signals()
     app = RepairApp(Dialogs(), MysqlAdmin(), Helper())
     try:
-        try:
-            note = app.remove_stale_reset()
-        except RepairError as e:
-            note = f"warning: {e}"
-        if note:
-            print(note, file=sys.stderr)
-        return app.first_install() if argv else app.main_menu()
+        with single_instance(app.paths.runtime) as only:
+            if not only:
+                print("xampp-repair is already running in another terminal.", file=sys.stderr)
+                return 1
+            try:
+                note = app.remove_stale_reset()
+            except RepairError as e:
+                note = f"warning: {e}"
+            if note:
+                print(note, file=sys.stderr)
+            return app.first_install() if argv else app.main_menu()
     except KeyboardInterrupt:
         return 130

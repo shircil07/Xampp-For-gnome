@@ -59,7 +59,7 @@ answers, not just until `mysqld` exists, and only "access denied" counts as "wro
 connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-250 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+259 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -168,7 +168,7 @@ Design rules:
 | `/usr/share/icons/hicolor/scalable/apps/io.github.shiron.XamppPanel.svg` | root, 0644 | App icon |
 | `/usr/share/icons/hicolor/scalable/status/xampp-panel-{running,stopped}.svg` | root, 0644 | Tray icons |
 | `/usr/local/bin/xampp-panel` | symlink | So `xampp-panel` works in a terminal |
-| `/run/xampp-panel/` | root, 0755 (tmpfs) | Created by `xampp-repair` when needed: holds a password reset's `reset-*/reset.sql` (`root:mysql`, 0710/0640, hash only) for the seconds a reset runs; gone at reboot |
+| `/run/xampp-panel/` | root, 0755 (tmpfs) | Created by `xampp-repair`: `repair.lock` (0600, one `xampp-repair` at a time) and, for the seconds a password reset runs, `reset-*/reset.sql` (`root:mysql`, 0710/0640, hash only); gone at reboot |
 | `~/.config/xampp-panel/settings.json` | you, 0600 | Created when you change the tray option |
 
 ### Files it edits (all reversible, all backed up once)
@@ -278,6 +278,9 @@ including your other sites. That's normal for XAMPP and fine on a single-user co
   - MySQL root/`pma` passwords and all SQL go to `mysql`/`mysql_upgrade` on **stdin**; the
     username/password pair goes in a `tempfile.mkstemp` `--defaults-extra-file` (mode 0600),
     deleted in a `finally` (`mysqladmin.MysqlAdmin._client`).
+  - The SQL on stdin is always UTF-8 (`encoding="utf-8"`, not the locale), like the option file:
+    MariaDB stores a hash of the bytes it receives, and a login (phpMyAdmin, a UTF-8 terminal) sends
+    UTF-8, so a non-ASCII password set under another locale would otherwise never log in.
   - The FTP password is piped to `openssl passwd -6 -stdin`, never passed as an argument.
   - Every SQL batch containing an escaped value starts with
     `SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')`, so `\`/`'` escaping
@@ -390,7 +393,8 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `63c0489` | Second review: only the pinned file is used automatically (other versions need `--installer`, a hint names them); curl `-q` and stdout to stderr; tests check what runs as the user and that the download really resumes |
 | `4cdecda` | Third review: the hint's `--installer` path is shell-quoted; `--help` says only the pinned version is checksummed; doc and test-comment precision |
 | `6c40e9e` | "Reset forgotten MySQL root password" (`repair.reset_root_password`, `configedit.mysql_init_file`, `mysqladmin.reset_root_sql`, health finding for a leftover line); a wrong current root password points to it |
-| this task | Review fixes for the reset: hash only in the file, `/run/xampp-panel` with `root:mysql` 0710/0640 and the group set via the open descriptor, folder removed first and signals blocked during cleanup, stale line removed on start, combined restart message, MySQL left as it was, `mysql` user checked first |
+| `8a29444` | Review fixes for the reset: hash only in the file, `/run/xampp-panel` with `root:mysql` 0710/0640 and the group set via the open descriptor, folder removed first and signals blocked during cleanup, stale line removed on start, combined restart message, MySQL left as it was, `mysql` user checked first |
+| this task | Second review: stale-line clean-up only deletes `<runtime>/reset-*/` folders; MySQL left as it was on every path; success stays success if the final stop fails; clearer clean-up messages; one `xampp-repair` at a time (`flock`); SQL on stdin always UTF-8 |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -445,9 +449,14 @@ Decisions made during the build (and what they cost if wrong):
      ::1; same hash), anonymous accounts dropped, phpMyAdmin switched to its login page. MySQL is
      stopped again if it was stopped before.
 
-  A run killed with `kill -9` can leave the `my.cnf` line (every start would run it again);
-  `xampp-repair` removes such a leftover (`remove_stale_reset`) every time it starts, and the folder
-  is in tmpfs anyway. Cost if wrong: if MariaDB fails on the file, MySQL is started normally again
+  MySQL is left the way it was: if it was stopped before, it is stopped again at the end, also
+  after a failed reset (a failure to stop it is added to the message, and a successful reset still
+  says "Done"). A run killed with `kill -9` can leave the `my.cnf` line (every start would run it
+  again); `xampp-repair` removes such a leftover (`remove_stale_reset`) every time it starts, but
+  deletes a folder only if the line names exactly `<runtime>/reset-*/reset.sql` (no `..`, no
+  symlink); any other path just loses its line. Only one `xampp-repair` runs at a time
+  (`single_instance`: `flock` on `/run/xampp-panel/repair.lock`), so that start-up clean-up can never
+  remove a reset another copy is in the middle of. The folder is in tmpfs anyway. Cost if wrong: if MariaDB fails on the file, MySQL is started normally again
   and the user sees the error. Not verified against a real MariaDB here (no server in the sandbox);
   see the manual check in the plan's Task 11.
 - **Esc on a yes/no question:** whiptail exits 255 on Esc; `Dialogs.yesno` raises `Cancelled` then,
@@ -621,7 +630,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 250 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 259 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 

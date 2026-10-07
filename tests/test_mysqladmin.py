@@ -91,6 +91,7 @@ class MysqlAdminTest(unittest.TestCase):
         self.assertNotIn("pa", " ".join(call["argv"][2:]))
         self.assertEqual(call["kwargs"]["input"], "SELECT 1;")
         self.assertNotIn("MYSQL_PWD", call["kwargs"]["env"])
+        self.assertEqual(call["kwargs"]["encoding"], "utf-8")  # same bytes as a UTF-8 login, whatever the locale
         self.assertEqual(call["mode"], 0o600)
         self.assertEqual(call["options"], '[client]\nuser="root"\npassword="pa\\"ss\\\\word"\n')
         self.assertFalse(os.path.exists(call["option_file"]))

@@ -82,7 +82,7 @@ def mysql_init_file(text: str, path: str | None) -> str:
     text = _INIT_LINE.sub("", text)
     if path is None:
         return text
-    if not _INIT_PATH.fullmatch(path):
+    if not is_safe_init_path(path):
         raise ValueError(f"unsafe init-file path: {path!r}")
     line = f"{_INIT_MARK}init-file={path}\n"
     new, count = _MYSQLD.subn(lambda m: m[0] + line, text, count=1)
@@ -91,6 +91,10 @@ def mysql_init_file(text: str, path: str | None) -> str:
     if text and not text.endswith("\n"):
         text += "\n"
     return f"{text}[mysqld]\n{line}"
+
+
+def is_safe_init_path(path: str) -> bool:
+    return bool(_INIT_PATH.fullmatch(path))
 
 
 def mysql_init_file_path(text: str) -> str | None:

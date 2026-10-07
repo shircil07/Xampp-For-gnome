@@ -116,7 +116,9 @@ class MysqlAdmin:
                     fh.write(f"password={_option_value(password)}\n")
             argv = [str(program), f"--defaults-extra-file={option_file}", *args]
             try:
-                proc = self.run(argv, input=sql, env=SAFE_ENV, capture_output=True, text=True, timeout=timeout)
+                # UTF-8 whatever the locale: the bytes MariaDB hashes must be the bytes a login sends.
+                proc = self.run(argv, input=sql, env=SAFE_ENV, capture_output=True, encoding="utf-8",
+                                errors="replace", timeout=timeout)
             except subprocess.TimeoutExpired:
                 raise MysqlError(f"{name} did not finish within {timeout} seconds") from None
         finally:

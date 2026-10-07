@@ -647,6 +647,100 @@ class ResetRootPasswordTest(RepairCase):
         self.assertEqual(self.paths.my_cnf.read_text(), self.original_cnf)
         self.assertTrue(elsewhere.exists())
 
+    def test_stale_lines_outside_a_reset_folder_never_delete_anything(self):
+        self.server()
+        victim = self.paths.runtime / "keep"
+        victim.mkdir(parents=True)
+        for path in (f"{self.paths.runtime}/../reset.sql", f"{self.paths.runtime}/keep/reset.sql",
+                     f"{self.paths.runtime}/reset-x/other.sql"):
+            with self.subTest(path=path):
+                self.paths.my_cnf.write_text(configedit.mysql_init_file(self.original_cnf, path))
+                self.app().remove_stale_reset()
+                self.assertEqual(self.paths.my_cnf.read_text(), self.original_cnf)
+                self.assertTrue(victim.exists())
+                self.assertTrue(self.paths.runtime.exists())
+
+    def test_an_unreadable_my_cnf_at_start_is_a_message_not_a_traceback(self):
+        self.paths.my_cnf.write_bytes(b"\xff\xfe[mysqld]\n")
+        with self.assertRaises(repair.RepairError):
+            self.app().remove_stale_reset()
+
+    def test_a_symlinked_or_foreign_runtime_folder_is_refused(self):
+        self.server()
+        real = self.paths.runtime.parent / "elsewhere"
+        real.mkdir()
+        self.paths.runtime.symlink_to(real)
+        app = self.app(True, NEW, NEW)
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("not a private folder", self.dialogs.messages()[-1])
+        self.paths.runtime.unlink()
+        app = self.app(True, NEW, NEW)
+        with mock.patch("os.geteuid", return_value=4242):
+            self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("not a private folder", self.dialogs.messages()[-1])
+        self.assertEqual(self.lampp_calls(), [])
+
+    def test_cleanup_runs_with_signals_blocked(self):
+        self.server()
+        calls = []
+        real = repair.signal.pthread_sigmask
+
+        def sigmask(how, mask):
+            calls.append((how, set(mask)))
+            return real(how, mask)
+        with mock.patch.object(repair.signal, "pthread_sigmask", sigmask):
+            self.app(True, NEW, NEW).reset_root_password()
+        self.assertEqual(calls[0], (repair.signal.SIG_BLOCK, {repair.signal.SIGINT, repair.signal.SIGHUP,
+                                                             repair.signal.SIGTERM}))
+        self.assertEqual(calls[-1][0], repair.signal.SIG_SETMASK)
+
+    def test_a_folder_that_cannot_be_removed_is_named(self):
+        self.server()
+        app = self.app(True, NEW, NEW)
+        with mock.patch.object(repair.shutil, "rmtree", side_effect=OSError(16, "Device or resource busy")):
+            self.assertFalse(app._attempt(app.reset_root_password))
+        message = self.dialogs.messages()[-1]
+        self.assertIn("Could not clean up after the reset", message)
+        self.assertIn(str(self.paths.runtime / "reset-"), message)
+        self.assertIn("The reset itself worked: root@localhost already has the new password.", message)
+
+    def test_cleanup_failure_without_a_folder_does_not_name_one(self):
+        self.server()
+        app = self.app(True, NEW, NEW)
+        real_write = repair.fsutil.atomic_write
+
+        def atomic_write(path, text):
+            if path == self.paths.my_cnf and "init-file=" not in text:
+                raise OSError(28, "No space left on device")
+            real_write(path, text)
+        with mock.patch.object(repair.tempfile, "mkdtemp", side_effect=OSError(28, "No space left on device")):
+            with mock.patch.object(repair.fsutil, "atomic_write", atomic_write):
+                self.paths.my_cnf.write_text(configedit.mysql_init_file(self.original_cnf, "/run/x/reset.sql"))
+                self.assertFalse(app._attempt(app.reset_root_password))
+        message = self.dialogs.messages()[-1]
+        self.assertNotIn("None", message)
+        self.assertIn("before MySQL is next started", message)
+        self.assertIn("The reset itself did not work: [Errno 28]", message)
+
+    def test_mysql_stopped_before_is_stopped_again_after_a_failed_reset(self):
+        self.server(start_fails=True)
+        self.running = False
+        app = self.app(True, NEW, NEW)
+        self.assertFalse(app._attempt(app.reset_root_password))
+        self.assertIn("The reset did not work", self.dialogs.messages()[-1])
+        self.assertFalse(self.running)
+        self.assertEqual(self.lampp_calls()[-1], ["stopmysql"])
+
+    def test_a_failing_final_stop_still_reports_success(self):
+        self.server()
+        self.running = False
+        app = self.app(True, NEW, NEW)
+        app._stop_mysql = mock.Mock(side_effect=[None, None, repair.RepairError("MySQL did not stop.")])
+        app.reset_root_password()
+        message = self.dialogs.messages()[-1]
+        self.assertTrue(message.startswith("Done. Log in to phpMyAdmin as 'root' with the new password."))
+        self.assertIn("MySQL could not be stopped again (MySQL did not stop.)", message)
+
     def test_wrong_current_password_points_to_the_reset(self):
         app = self.app("wrong one", None)
         self.assertFalse(app._attempt(app.change_root_password))
@@ -674,6 +768,26 @@ class MenuAndMainTest(RepairCase):
             with self.subTest(sig=sig), self.assertRaises(SystemExit) as cm:
                 signal.getsignal(sig)(sig, None)
             self.assertEqual(cm.exception.code, code)
+
+    def test_main_removes_a_stale_reset_and_refuses_a_second_copy(self):
+        app = mock.Mock()
+        app.remove_stale_reset.return_value = "Removed a root password reset left over from an interrupted run (x)."
+        app.main_menu.return_value = 0
+        app.paths = self.paths
+        with mock.patch("os.geteuid", return_value=0), mock.patch.object(repair.shutil, "which", return_value="/w"), \
+                mock.patch.object(repair, "exit_on_signals"), mock.patch.object(repair, "RepairApp", return_value=app), \
+                mock.patch.object(repair, "DEFAULT", self.paths):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(repair.main([]), 0)
+            self.assertIn("Removed a root password reset left over", err.getvalue())
+            with repair.single_instance(self.paths.runtime) as got:
+                self.assertTrue(got)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(repair.main([]), 1)
+                self.assertIn("already running", err.getvalue())
+        app.remove_stale_reset.assert_called()
 
     def test_main_rejects_bad_usage_and_non_root(self):
         self.assertEqual(repair.main(["bogus"]), 2)
