@@ -76,11 +76,14 @@ are needed. The panel only launches the terminal.
 - `execute(sql, root_password)`: runs `mysql -u root` with the SQL on **stdin** and the password
   in a temporary `--defaults-extra-file` (mode 0600, deleted in `finally`). Never on argv.
 - `check_login(user, password) -> bool`, `root_has_password() -> bool`, `anonymous_accounts()`.
+  (Built as `can_login(user, password, database=None)`: False only when MySQL refuses the login,
+  `AccessDenied` for errors 1044/1045/1049/1698; any other client error is raised. `ping()` is True
+  once the server answers at all.)
 - Root password validation: 8–128 chars, no control characters, kept verbatim (spaces allowed).
 
 **`dialogs.py`** — `Dialogs` wraps whiptail (`menu`, `yesno`, `msgbox`, `textbox`,
 `passwordbox`, `inputbox`): UI on the terminal, the answer read from whiptail's stderr; Esc/Cancel
-returns `None`. `FakeDialogs` in tests replays scripted answers.
+returns `None`, except `yesno`: Yes/No are True/False and Esc raises `Cancelled` (never "No"). `FakeDialogs` in tests replays scripted answers.
 
 **`repair.py`** — `RepairApp(dialogs, admin, helper, paths)`; entry points:
 - no arguments → main menu (loops until Quit),
@@ -108,7 +111,9 @@ lean mode) instead of detecting markers, because a XAMPP upgrade removes them to
 
 MySQL-dependent items start MySQL first if it isn't running (and say so: a "Starting MySQL" line
 on the terminal, no extra keypress). "Running" means a live XAMPP `mysqld` process, even when its
-port is not listening (`skip-networking`).
+port is not listening (`skip-networking`); they then wait (up to 20 s in total) until the server
+answers (`MysqlAdmin.ping`). A connection error is reported as an error, never as a wrong password.
+The health check shows it as "MySQL: cannot connect: …".
 
 ### First-install flow (`xampp-repair first-install`, replaces `lampp security` in `setup.sh`)
 
@@ -117,7 +122,8 @@ port is not listening (`skip-networking`).
    user can log in, leave it alone ("already working"). Otherwise same as the menu's "Fix
    phpMyAdmin pma login", but always with a fresh `controlpass` (`secrets.token_urlsafe(24)`).
 3. If root already has a password: skip steps 3–4 with a note pointing at "Change MySQL root
-   password" (never ask for the current password here). Otherwise ask for a root password
+   password" (never ask for the current password here). If step 2 already asked for it, still drop
+   the anonymous accounts with it. Otherwise ask for a root password
    (passwordbox; empty/Cancel = skip, with a note about the banner).
 4. Drop anonymous accounts; set the root password if given; switch phpMyAdmin
    `auth_type` `config` → `cookie` only if a password was set.

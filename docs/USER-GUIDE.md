@@ -31,6 +31,8 @@ It asks before doing anything you might not want:
 - **MySQL root password** (a password box near the end): the password for the MySQL admin user `root`.
   Recommended. Leave it empty to skip; the panel then reminds you with a yellow bar. Not asked again
   when you re-run `setup.sh` and root already has a password (change it from the repair menu instead).
+  If setup needs the current root password to repair phpMyAdmin's account, it asks for it once and
+  also uses it to remove XAMPP's anonymous MySQL accounts.
 
 phpMyAdmin's internal account (`pma`) is always set up for you, without a question. Re-running
 `setup.sh` leaves it alone if it already works.
@@ -140,9 +142,13 @@ MySQL/phpMyAdmin passwords and to fix the known ways XAMPP's own `lampp security
 | Quit | Closes the menu. If you opened it from the panel, the terminal then shows "Press Enter to close"; press Enter. |
 
 It's safe to open the menu and look around: Health check and Show phpMyAdmin pma password only read.
-The other items change something as soon as you choose them, but those that need a new password ask
-for it first, and Esc or Cancel at any question stops without changing anything. Items that need
-MySQL start it if it isn't running (the terminal says so) and leave it running.
+Esc or Cancel at any question stops without changing anything, with two exceptions that do their
+work as soon as you choose them: "Fix phpMyAdmin pma login" asks nothing (except the MySQL root
+password, if it needs it and doesn't know it yet), and "Turn MySQL networking back on" fixes the
+config first and then asks whether to restart MySQL (No or Esc there only skips the restart). Items
+that need MySQL start it if it isn't running (the terminal says so), wait until it answers, and
+leave it running. If it doesn't answer within about 20 seconds you get a message saying so; check
+the MySQL log in the panel.
 
 ---
 
