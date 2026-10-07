@@ -339,6 +339,7 @@ class FirstInstallTest(RepairCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.admin.root_password, "old-pass 1")
         self.assertIn(health.FIX_ROOT, printed)
+        self.assertNotIn("anonymous accounts removed", printed)  # the password is not known here
 
     def test_root_password_is_asked_once_when_pma_needs_it(self):
         self.admin.root_password = "old-pass 1"
@@ -348,6 +349,9 @@ class FirstInstallTest(RepairCase):
         self.assertEqual(self.admin.root_password, "old-pass 1")
         self.assertEqual(len(self.passwordboxes()), 1)
         self.assertIn(health.FIX_ROOT, printed)
+        self.assertEqual(self.admin.anonymous, [])  # the known password was used to drop them
+        self.assertTrue(self.admin.executed[-1].startswith(repair.drop_anonymous_sql()))
+        self.assertIn("anonymous accounts removed", printed)
 
     def test_cancelled_root_prompt_is_not_repeated(self):
         self.admin.root_password = "old-pass 1"

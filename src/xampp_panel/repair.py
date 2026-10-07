@@ -296,9 +296,14 @@ class RepairApp:
         self._setup_pma(fresh=True)
 
     def _first_root_password(self, notes: list[str]) -> None:
-        """Only a root without a password is asked for one; an existing password is never asked for here."""
+        """Only a root without a password is asked for one; an existing password is never asked for here.
+        If the pma step already asked for it, it is used to drop the anonymous accounts."""
         if not self.admin.can_login("root", ""):
-            notes.append(f"MySQL root already has a password: kept. "
+            known = self.root_password is not None
+            if known:
+                self._set_root_password(self.root_password, None)
+            notes.append(f"MySQL root already has a password: kept"
+                         f"{'; anonymous accounts removed' if known else ''}. "
                          f"To change it: sudo xampp-repair → {health.FIX_ROOT}")
             return
         new = self._new_password("Choose a MySQL root password.\n\nLeave it empty to skip "
