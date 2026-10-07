@@ -21,9 +21,9 @@ cd Xampp-For-gnome              # or ~/Downloads/xampp-panel on the original mac
 sudo ./setup.sh
 ```
 
-The script installs XAMPP if it isn't already in `/opt/lampp`. It uses a `xampp-linux-x64-*-installer.run` from the
-project folder or `~/Downloads` (XAMPP 8.2.12 if it is there, otherwise the highest version). If there is none, it downloads
-XAMPP 8.2.12 into `~/Downloads` and checks its SHA-256 before running it. Run `./setup.sh --help` for options (`--allow-lan`, `--lean`, `--installer PATH`).
+The script installs XAMPP 8.2.12 if XAMPP isn't already in `/opt/lampp`. It uses `xampp-linux-x64-8.2.12-0-installer.run`
+from the project folder or `~/Downloads`, or downloads it into `~/Downloads`, and checks its SHA-256 before running it.
+For another version, pass its installer with `--installer PATH`. Run `./setup.sh --help` for options (`--allow-lan`, `--lean`, `--installer PATH`).
 
 ## Remove
 

@@ -11,7 +11,8 @@ XAMPP_SHA256=df0774e7a6d0d0754a5f0132015411234b5f953df2365b693d3758fc35a30374
 XAMPP_ATTEMPTS=4         # a dropped connection resumes where it stopped
 XAMPP_RETRY_PAUSE=5      # seconds between attempts
 XAMPP_STALL_SECONDS=60   # give up an attempt that receives nothing for this long
-# Only installer names like this are picked up automatically (anything else needs --installer).
+# Installers of other versions are never run automatically; names like this are only mentioned
+# in a hint (the strict pattern keeps odd characters out of the terminal).
 XAMPP_NAME_RE='^xampp-linux-x64-[0-9]+(\.[0-9]+)*-[0-9]+-installer\.run$'
 
 _xampp_error() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; }
@@ -19,21 +20,25 @@ _xampp_error() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; }
 # Runs a command as the user who called sudo: downloads and changes in their folders never run as root.
 xampp_as_user() { runuser -u "$REAL_USER" -- "$@"; }
 
-# xampp_find_installer DIR...: print the installer to use from DIRs. The pinned file wins;
-# otherwise the highest version. Returns 1 if there is none.
+# xampp_find_installer DIR...: print the first DIR/$XAMPP_FILE (the pinned, checksummed version).
+# Returns 1 if none: other versions are never picked automatically, they need --installer.
 xampp_find_installer() {
-  local dir path name candidates=()
+  local dir
   for dir in "$@"; do
     [[ -f $dir/$XAMPP_FILE ]] && { printf '%s\n' "$dir/$XAMPP_FILE"; return 0; }
   done
+  return 1
+}
+
+# xampp_other_installers DIR...: print other XAMPP installers in DIRs (for a hint), one per line.
+xampp_other_installers() {
+  local dir path
   for dir in "$@"; do
     for path in "$dir"/xampp-linux-x64-*-installer.run; do
-      name=${path##*/}
-      [[ -f $path && $name =~ $XAMPP_NAME_RE ]] && candidates+=("$name"$'\t'"$path")
+      [[ -f $path && ${path##*/} != "$XAMPP_FILE" && ${path##*/} =~ $XAMPP_NAME_RE ]] && printf '%s\n' "$path"
     done
   done
-  ((${#candidates[@]})) || return 1
-  printf '%s\n' "${candidates[@]}" | sort -V -t $'\t' -k1,1 | tail -n 1 | cut -f2-
+  return 0
 }
 
 # xampp_download DEST: fetch $XAMPP_URL to DEST as the user, through DEST.part (resumed after a
@@ -45,9 +50,10 @@ xampp_download() {
     return 1
   fi
   for ((attempt = 1; attempt <= XAMPP_ATTEMPTS; attempt++)); do
-    if xampp_as_user curl --fail --location --proto =https --proto-redir =https --tlsv1.2 \
+    # -q: ignore ~/.curlrc; >&2: nothing curl prints may end up in the captured path on stdout.
+    if xampp_as_user curl -q --fail --location --proto =https --proto-redir =https --tlsv1.2 \
          --connect-timeout 30 --speed-limit 1 --speed-time "$XAMPP_STALL_SECONDS" \
-         --continue-at - --progress-bar --output "$part" -- "$XAMPP_URL"; then
+         --continue-at - --progress-bar --output "$part" -- "$XAMPP_URL" >&2; then
       xampp_as_user mv -f -- "$part" "$dest" && return 0
       _xampp_error "cannot save the download as $dest."
       return 1
@@ -75,14 +81,19 @@ xampp_verified_copy() {
 
 # xampp_prepare WORKDIR DOWNLOADS INSTALLER SEARCH_DIR...: decide which installer to run and print
 # the path of a private copy of it in WORKDIR. INSTALLER is --installer's value or "" (then search
-# DOWNLOADS and SEARCH_DIRs, and download into DOWNLOADS if nothing is there). The pinned version is
-# checked against its SHA-256; other installers are copied unchecked. Messages go to stderr.
+# DOWNLOADS and SEARCH_DIRs for the pinned version, and download it into DOWNLOADS if it isn't there).
+# The pinned version is checked against its SHA-256; another version runs only when given as
+# INSTALLER, and is then copied unchecked. Messages go to stderr; stdout is only the path.
 xampp_prepare() {
   local workdir=$1 downloads=$2 installer=$3 downloaded=0 run rc=0
   shift 3
   if [[ -z $installer ]]; then
     if ! installer=$(xampp_find_installer "$@" "$downloads"); then
-      echo "No XAMPP installer found. Downloading $XAMPP_FILE into $downloads…" >&2
+      local other
+      while IFS= read -r other; do
+        echo "Found $other, but it isn't XAMPP $XAMPP_VERSION. To install it instead: sudo ./setup.sh --installer $other" >&2
+      done < <(xampp_other_installers "$@" "$downloads")
+      echo "Downloading XAMPP $XAMPP_VERSION ($XAMPP_FILE) into $downloads…" >&2
       xampp_download "$downloads/$XAMPP_FILE" || return 1
       installer="$downloads/$XAMPP_FILE"
       downloaded=1

@@ -11,21 +11,27 @@ PAYLOAD = b"#!/bin/sh\necho fake installer\n"
 GOOD = hashlib.sha256(PAYLOAD).hexdigest()
 PINNED = "xampp-linux-x64-8.2.12-0-installer.run"
 
-# A curl stand-in: logs its argv, appends $FAKE_PAYLOAD to the --output file (like a resumed
-# download would) and fails while the counter file holds a positive number ($FAKE_FAILS times).
+# A curl stand-in that behaves like a resumed download: it logs its argv, continues $FAKE_PAYLOAD
+# from the --output file's current size, and while the counter file is positive it delivers only
+# one more byte and fails. So the result equals the payload only if every attempt resumed.
 FAKE_CURL = """#!/bin/bash
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 out=""
 while (($#)); do [[ $1 == --output ]] && out=$2; shift; done
+size=$(stat -c %s "$out" 2>/dev/null || echo 0)
+rest=${FAKE_PAYLOAD:size}
 fails=$(cat "$FAKE_FAILS_FILE" 2>/dev/null || echo 0)
-if ((fails > 0)); then echo $((fails - 1)) > "$FAKE_FAILS_FILE"; exit 28; fi
-[[ -n $out ]] && printf '%s' "$FAKE_PAYLOAD" > "$out"
-exit 0
+if ((fails > 0)); then
+  echo $((fails - 1)) > "$FAKE_FAILS_FILE"
+  printf '%s' "${rest:0:1}" >> "$out"
+  exit 18
+fi
+printf '%s' "$rest" >> "$out"
 """
 
 
 class LibTestCase(unittest.TestCase):
-    """Runs the library in bash with a fake curl; "as the user" just runs the command (tests are unprivileged)."""
+    """Runs the library in bash with a fake curl; "as the user" is logged and run directly (tests are unprivileged)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -37,6 +43,7 @@ class LibTestCase(unittest.TestCase):
         curl.write_text(FAKE_CURL)
         curl.chmod(0o755)
         self.log = self.tmp / "curl.log"
+        self.as_user_log = self.tmp / "as-user.log"
         self.fails = self.tmp / "fails"
         self.downloads = self.tmp / "Downloads"
         self.project = self.tmp / "project"
@@ -48,10 +55,15 @@ class LibTestCase(unittest.TestCase):
         self.fails.write_text(str(fails))
         env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", FAKE_LOG=str(self.log),
                    FAKE_FAILS_FILE=str(self.fails), FAKE_PAYLOAD=payload.decode())
+        # "As the user" logs the command and runs it (tests are unprivileged).
         prelude = (f'set -euo pipefail\nshopt -s nullglob\nsource "{LIB}"\n'
-                   f'xampp_as_user() {{ "$@"; }}\nXAMPP_RETRY_PAUSE=0\n'
+                   f'xampp_as_user() {{ printf "%s\\n" "$1" >> "{self.as_user_log}"; "$@"; }}\n'
+                   f'XAMPP_RETRY_PAUSE=0\n'
                    + (f"XAMPP_SHA256={sha}\n" if sha else ""))
         return subprocess.run(["bash", "-c", prelude + script], env=env, capture_output=True, text=True)
+
+    def as_user(self):
+        return self.as_user_log.read_text().split() if self.as_user_log.exists() else []
 
     def curl_calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
@@ -91,22 +103,20 @@ class FindInstallerTest(LibTestCase):
         pinned = self.put(self.project, PINNED)
         self.assertEqual(self.find().stdout.strip(), str(pinned))
 
-    def test_otherwise_the_highest_version(self):
-        self.put(self.downloads, "xampp-linux-x64-8.0.30-0-installer.run")
-        newest = self.put(self.downloads, "xampp-linux-x64-8.2.4-1-installer.run")
+    def test_other_versions_and_partial_downloads_are_never_picked(self):
+        self.put(self.downloads, "xampp-linux-x64-99.0-0-installer.run")
         self.put(self.project, "xampp-linux-x64-8.1.25-0-installer.run")
-        self.assertEqual(self.find().stdout.strip(), str(newest))
-
-    def test_odd_names_and_partial_downloads_are_ignored(self):
         self.put(self.downloads, PINNED + ".part")
-        self.put(self.downloads, "xampp-linux-x64-evil;rm-installer.run")
         proc = self.find()
-        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout, "")
 
-    def test_the_folder_above_the_project_is_not_searched(self):
-        self.put(self.tmp, PINNED)
-        self.assertEqual(self.find().stdout, "")
+    def test_other_installers_are_listed_for_the_hint(self):
+        other = self.put(self.downloads, "xampp-linux-x64-8.1.25-0-installer.run")
+        self.put(self.downloads, "xampp-linux-x64-evil\x1b[2J-installer.run")
+        self.put(self.downloads, PINNED + ".part")
+        proc = self.bash(f'xampp_other_installers "{self.project}" "{self.downloads}"')
+        self.assertEqual(proc.stdout.splitlines(), [str(other)])
 
 
 class DownloadTest(LibTestCase):
@@ -117,6 +127,8 @@ class DownloadTest(LibTestCase):
         self.assertEqual(dest.read_bytes(), PAYLOAD)
         self.assertFalse((self.downloads / (PINNED + ".part")).exists())
         args = self.curl_calls()[0]
+        self.assertTrue(args.startswith("-q "), args)  # ~/.curlrc is ignored
+        self.assertEqual(proc.stdout, "")
         for flag in ("--fail", "--location", "--proto =https", "--proto-redir =https", "--tlsv1.2",
                      "--connect-timeout", "--speed-limit", "--speed-time", "--continue-at -"):
             self.assertIn(flag, args)
@@ -127,6 +139,23 @@ class DownloadTest(LibTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(self.curl_calls()), 3)
         self.assertTrue(all("--continue-at -" in call for call in self.curl_calls()))
+        self.assertEqual(dest.read_bytes(), PAYLOAD)  # only true if each attempt resumed
+
+    def test_curl_output_never_reaches_stdout(self):
+        noisy = self.bin / "curl"
+        noisy.write_text(FAKE_CURL.replace('printf \'%s\\n\' "$*" >> "$FAKE_LOG"',
+                                           'printf \'%s\\n\' "$*" >> "$FAKE_LOG"; echo write-out-noise'))
+        proc = self.bash(f'xampp_download "{self.downloads / PINNED}"')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("write-out-noise", proc.stderr)
+
+    def test_everything_in_the_users_folder_runs_as_the_user(self):
+        self.bash(f'xampp_download "{self.downloads / PINNED}"', fails=99)
+        self.assertEqual(self.as_user(), ["mkdir"] + ["curl"] * 4 + ["rm"])
+        self.as_user_log.unlink()
+        self.bash(f'xampp_download "{self.downloads / PINNED}"')
+        self.assertEqual(self.as_user(), ["mkdir", "curl", "mv"])
 
     def test_giving_up_leaves_nothing_behind(self):
         dest = self.downloads / PINNED
@@ -194,11 +223,19 @@ class PrepareTest(LibTestCase):
         self.assertEqual(proc.stdout.strip(), str(self.work / PINNED))
         self.assertEqual(self.curl_calls(), [])
 
-    def test_other_versions_run_unchecked_from_a_private_copy(self):
-        self.put(self.downloads, "xampp-linux-x64-8.1.25-0-installer.run", b"other")
+    def test_another_version_is_not_run_but_named_in_a_hint(self):
+        other = self.put(self.downloads, "xampp-linux-x64-8.1.25-0-installer.run", b"other")
         proc = self.prepare()
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        copy = self.work / "xampp-linux-x64-8.1.25-0-installer.run"
+        self.assertEqual(proc.stdout.strip(), str(self.work / PINNED))
+        self.assertEqual(len(self.curl_calls()), 1)
+        self.assertIn(f"--installer {other}", proc.stderr)
+
+    def test_installer_option_runs_another_version_unchecked_from_a_private_copy(self):
+        other = self.put(self.tmp, "xampp-linux-x64-8.1.25-0-installer.run", b"other")
+        proc = self.prepare(installer=str(other))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        copy = self.work / other.name
         self.assertEqual(proc.stdout.strip(), str(copy))
         self.assertEqual(copy.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.curl_calls(), [])
@@ -209,6 +246,7 @@ class PrepareTest(LibTestCase):
         self.assertEqual(proc.stdout, "")
         self.assertFalse((self.downloads / PINNED).exists())
         self.assertIn("deleted", proc.stderr)
+        self.assertEqual(self.as_user()[-1], "rm")
 
     def test_a_damaged_file_setup_did_not_download_is_kept(self):
         found = self.put(self.downloads, PINNED, b"tampered")

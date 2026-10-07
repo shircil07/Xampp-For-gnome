@@ -21,9 +21,10 @@ Usage: sudo ./setup.sh [options]
 Installs XAMPP (if /opt/lampp does not exist yet) and the XAMPP Panel app.
 
 Options:
-  --installer PATH  XAMPP installer to use (default: look in this folder
-                    and in ~/Downloads; if none is there, download XAMPP
-                    $XAMPP_VERSION into ~/Downloads and check its checksum)
+  --installer PATH  XAMPP installer to use, e.g. another version (default:
+                    XAMPP $XAMPP_VERSION from this folder or ~/Downloads,
+                    downloaded into ~/Downloads if it isn't there; its
+                    checksum is always checked)
   --allow-lan       let other devices on your network reach XAMPP
                     (default: only this computer can)
   --lean            turn on lean mode without asking
@@ -73,7 +74,7 @@ else
   run="$(xampp_prepare "$workdir" "$REAL_HOME/Downloads" "$INSTALLER" "$SRC_DIR")" || exit 1
   echo "Installing $(basename -- "$run"). This takes a minute…"
   "$run" --mode unattended --unattendedmodeui none
-  rm -rf -- "$workdir"   # don't keep a 150 MB copy around for the rest of setup
+  rm -rf -- "$workdir"   # don't keep a ~160 MB copy around for the rest of setup
   trap - EXIT
   [[ -x $LAMPP/lampp ]] || die "the XAMPP installer finished but $LAMPP/lampp is missing."
 fi

@@ -59,7 +59,7 @@ answers, not just until `mysqld` exists, and only "access denied" counts as "wro
 connection error is shown as an error, never read as "root has a password".
 
 Verified only by the unit suite below (`PYTHONPATH=src python3 -m unittest discover -s tests`,
-223 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
+225 tests, OK) — not by a real run: whiptail rendering, a real MariaDB server, real `sudo`, and
 terminal-emulator detection on an actual desktop. See the plan's Task 11 for the manual checklist
 to run once on the target machine.
 
@@ -143,7 +143,7 @@ Design rules:
 | `src/xampp_panel/health.py` | `HealthCheck`: read-only report (services, configs, MySQL accounts, phpMyAdmin login, sites) with the menu item that fixes each problem |
 | `src/xampp_panel/repair.py` | `RepairApp`: the `xampp-repair` menu, its flows, and `first-install`; `main()` |
 | `src/xampp_panel/terminal.py` | Picks a terminal emulator and builds its argv for "Repair & configure…" (pure, no GTK) |
-| `lib/xampp-download.sh` | Sourced by `setup.sh`: the pinned XAMPP version (`XAMPP_VERSION`, `XAMPP_SHA256`; file name and URL derive from the version) and `xampp_prepare`, which `setup.sh` calls once: `xampp_find_installer` (pinned file first, else highest version, strict name pattern), `xampp_download` (as the user, HTTPS only, resumable `.part`, retries, stall timeout), `xampp_verified_copy` (private copy, checksum checked on the copy; exit 1 = wrong checksum, 2 = copy failed) |
+| `lib/xampp-download.sh` | Sourced by `setup.sh`: the pinned XAMPP version (`XAMPP_VERSION`, `XAMPP_SHA256`; file name and URL derive from the version) and `xampp_prepare`, which `setup.sh` calls once: `xampp_find_installer` (the pinned file only), `xampp_other_installers` (other versions, for a hint), `xampp_download` (as the user, HTTPS only, resumable `.part`, retries, stall timeout), `xampp_verified_copy` (private copy, checksum checked on the copy; exit 1 = wrong checksum, 2 = copy failed) |
 | `bin/xampp-panel`, `bin/xampp-helper`, `bin/xampp-repair` | Installed launchers (`#!/usr/bin/python3 -I`) |
 | `data/` | `.desktop` file, polkit policy, SVG icons |
 | `tests/` | stdlib `unittest` suite |
@@ -260,7 +260,7 @@ pkexec /opt/xampp-panel/bin/xampp-helper site-add demo "$HOME/Sites/demo"; echo 
 | Pointing a site at a system folder, or at a symlink to one | Path checks (above). ACLs are applied **as the user**, so even a swapped symlink can't give Apache access to files the user can't already grant. |
 | Injecting Apache config through a site name or path | Strict name regex; quotes, `$`, backslash, wildcards and newlines are banned in paths |
 | Anyone using the password prompt remotely | polkit policy: `allow_active = auth_admin_keep`; inactive and remote sessions are denied |
-| A damaged, swapped or planted XAMPP installer run as root by `setup.sh` | Installers are only picked up from the project folder and `~/Downloads` (not the folder above the project, which may be shared, e.g. `/tmp`), and only with a strict `xampp-linux-x64-<version>-<n>-installer.run` name. The pinned file always wins over other versions. Whatever runs is first copied into a root-only folder under `/root` (`mktemp -d -p /root`, so not `$TMPDIR` and not a noexec `/tmp`); for the pinned version the SHA-256 is checked **on that copy**, which is what runs. Downloads and deletions in `~/Downloads` run as the user (`runuser`); curl is HTTPS-only, also on redirects, TLS 1.2+. A pinned file with a wrong checksum stops the install; it is deleted only if `setup.sh` downloaded it in this run. Installers with other names (found, or given with `--installer`) are used unchecked: they are the user's explicit choice. |
+| A damaged, swapped or planted XAMPP installer run as root by `setup.sh` | Only the pinned, checksummed file (`$XAMPP_FILE`) is picked up automatically, and only from the project folder and `~/Downloads` (not the folder above the project, which may be shared, e.g. `/tmp`). Other versions found there are only named in a hint (strict `xampp-linux-x64-<version>-<n>-installer.run` names, so no odd characters reach the terminal); a stray or planted `xampp-linux-x64-99.0-…` is never run. Whatever runs is first copied into a root-only folder under `/root` (`mktemp -d -p /root`, so not `$TMPDIR` and not a noexec `/tmp`); for the pinned version the SHA-256 is checked **on that copy**, which is what runs. Downloads and deletions in `~/Downloads` run as the user (`runuser`); curl is HTTPS-only, also on redirects, TLS 1.2+. A pinned file with a wrong checksum stops the install; it is deleted only if `setup.sh` downloaded it in this run. Another version runs only when given with `--installer` (the user's explicit choice), and then unchecked. curl runs with `-q` (no `~/.curlrc`) and its stdout goes to stderr, so nothing it prints can change the path `setup.sh` runs. |
 | A broken config taking Apache down | `apachectl -t` runs before every site change; on failure the previous vhost file is restored |
 
 **Accepted limitation:** every site's PHP runs as `daemon` and can read anything `daemon` can read,
@@ -384,7 +384,8 @@ final whole-project review and fixes. Security-sensitive parts were reviewed by 
 | `9fc18fa` | Fix wave 3: `ping()` also counts errors 1040/1129/1130/1862 as "the server answers"; `can_login` still raises them |
 | `0b6ed50` | Docs for fix wave 3 (USER-GUIDE: "Run mysql_upgrade" acts without a question) |
 | `2d904ca` | `setup.sh` downloads XAMPP 8.2.12 when no installer is found (`lib/xampp-download.sh`), checks its SHA-256 and runs a private copy |
-| this task | Review fixes for the download: pinned file wins over a name that sorts later, folder above the project no longer searched, failed copy ≠ wrong checksum, resumable download with stall timeout, private copy under `/root`, deletes as the user, whole decision in the tested `xampp_prepare` |
+| `9ea8b88` | Review fixes for the download: pinned file wins over a name that sorts later, folder above the project no longer searched, failed copy ≠ wrong checksum, resumable download with stall timeout, private copy under `/root`, deletes as the user, whole decision in the tested `xampp_prepare` |
+| this task | Second review: only the pinned file is used automatically (other versions need `--installer`, a hint names them); curl `-q` and stdout to stderr; tests check what runs as the user and that the download really resumes |
 
 Decisions made during the build (and what they cost if wrong):
 
@@ -584,7 +585,7 @@ If the packages were removed, re-running `sudo ./setup.sh` reinstalls them.
 
 ```bash
 cd ~/Downloads/xampp-panel
-PYTHONPATH=src python3 -m unittest discover -s tests -v   # 223 tests; GUI import test needs PyGObject
+PYTHONPATH=src python3 -m unittest discover -s tests -v   # 225 tests; GUI import test needs PyGObject
 PYTHONPATH=src python3 -m xampp_panel.main                # run the panel from source (uses installed helper)
 ```
 
